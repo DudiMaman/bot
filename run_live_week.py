@@ -6,7 +6,12 @@ from strategies import DonchianTrendADXRSI
 from risk import RiskManager, TradeManager
 from utils import atr
 from connectors.ccxt_connector import CCXTConnector
-from connectors.alpaca_connector import AlpacaConnector
+
+# <<< חדש: יבוא Alpaca אופציונלי >>>
+try:
+    from connectors.alpaca_connector import AlpacaConnector
+except Exception:
+    AlpacaConnector = None
 
 load_dotenv()
 
@@ -41,16 +46,19 @@ def main():
     equity = float(cfg['portfolio']['equity0'])
     rm = RiskManager(equity, cfg['portfolio']['risk_per_trade'], cfg['portfolio']['max_position_pct'])
 
-    conns = []
-    for c in cfg['live_connectors']:
-        if c['type'] == 'ccxt':
-            conn = CCXTConnector(c['exchange_id'], paper=c.get('paper', True), default_type=c.get('default_type','spot'))
-        elif c['type'] == 'alpaca':
-            conn = AlpacaConnector(paper=c.get('paper', True))
-        else:
+conns = []
+for c in cfg['live_connectors']:
+    if c['type'] == 'ccxt':
+        conn = CCXTConnector(c['exchange_id'], paper=c.get('paper', True), default_type=c.get('default_type','spot'))
+    elif c['type'] == 'alpaca':
+        if AlpacaConnector is None:
+            print("Alpaca connector not available; skipping Alpaca.")
             continue
-        conn.init()
-        conns.append((c, conn))
+        conn = AlpacaConnector(paper=c.get('paper', True))
+    else:
+        continue
+    conn.init()
+    conns.append((c, conn))
 
     open_positions = {}
     cooldowns = {}
@@ -176,3 +184,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
