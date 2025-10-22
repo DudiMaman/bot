@@ -71,7 +71,7 @@ live_connectors:
     htf_timeframe: "1h"
 
 strategy:
-  donchian_window: 20
+  donchian_len: 20
   adx_min: 14          # היה 18–20; הורדנו כדי לראות יותר סיגנלים
   rsi_buy: 55          # היה 60; הורדנו מעט
   rsi_sell: 45         # היה 40; העלינו מעט
@@ -85,3 +85,4 @@ trade_manager:
   be_after_R: 0.8      # העבר ל-B/E מהר כדי לאבטח
   trail_atr_k: 1.2
   max_bars_in_trade: 48
+
