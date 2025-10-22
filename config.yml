@@ -1,43 +1,87 @@
-# ======================
-# CONFIG: Bybit Testnet
-# ======================
-
 live_connectors:
   - name: bybit_testnet
     type: ccxt
     exchange_id: bybit
     paper: true
     default_type: spot
-    symbols: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-    timeframe: "1h"
-    htf_timeframe: "4h"
-
-portfolio:
-  equity0: 100000.0
-  risk_per_trade: 0.008
-  max_position_pct: 0.25
-  max_concurrent_positions: 5
-  daily_loss_cap_R: -4.0
-  cooldown_bars_after_loss: 2
+    # הוסף עוד סימבולים פופולריים (ודא שהם קיימים ב-Bybit Testnet):
+    symbols:
+    symbols:
+      - "BTC/USDT"
+      - "ETH/USDT"
+      - "SOL/USDT"
+      - "XRP/USDT"
+      - "ADA/USDT"
+      - "DOGE/USDT"
+      - "AVAX/USDT"
+      - "LINK/USDT"
+      - "MATIC/USDT"
+      - "APT/USDT"
+      - "BNB/USDT"
+      - "TRX/USDT"
+      - "XLM/USDT"
+      - "BCH/USDT"
+      - "SUI/USDT"
+      - "AVAX/USDT"
+      - "HBAR/USDT"
+      - "LTC/USDT"
+      - "SHIB/USDT"
+      - "XMR/USDT"
+      - "TON/USDT"
+      - "DAI/USDT"
+      - "MNT/USDT"
+      - "CRO/USDT"
+      - "AAVE/USDT"
+      - "OKB/USDT"
+      - "WLFI/USDT"
+      - "ENA/USDT"
+      - "PEPE/USDT"
+      - "NEAR/USDT"
+      - "APT/USDT"
+      - "ETC/USDT"
+      - "ONDO/USDT"
+      - "ASTER/USDT"
+      - "POL/USDT"
+      - "WLD/USDT"
+      - "IP/USDT"
+      - "ARB/USDT"
+      - "ICP/USDT"
+      - "ALGO/USDT"
+      - "ATOM/USDT"
+      - "VET/USDT"
+      - "KAS/USDT"
+      - "PUMP/USDT"
+      - "PENGU/USDT"
+      - "FLR/USDT"
+      - "RENDER/USDT"
+      - "SEI/USDT"
+      - "TRUMP/USDT"
+      - "XDC/USDT"
+      - "FIL/USDT"
+      - "QNT/USDT"
+      - "CAKE/USDT"
+      - "INJ/USDT"
+      - "TIA/USDT"
+      - "OP/USDT"
+      - "AERO/USDT"
+      - "FLOKI/USDT"
+      - "GRT/USDT"
+      - "IOTA/USDT"    # תקצר טיימפריים כדי לקבל יותר אירועים
+    timeframe: "15m"
+    htf_timeframe: "1h"
 
 strategy:
-  donchian_len: 20
-  rsi_len: 14
-  rsi_long_max: 70
-  rsi_short_min: 30
-  adx_len: 14
-  adx_min: 18
+  donchian_window: 20
+  adx_min: 14          # היה 18–20; הורדנו כדי לראות יותר סיגנלים
+  rsi_buy: 55          # היה 60; הורדנו מעט
+  rsi_sell: 45         # היה 40; העלינו מעט
 
 trade_manager:
-  atr_k_sl: 1.8
-  r1_R: 1.5
-  p1_pct: 0.30
-  r2_R: 3.0
-  p2_pct: 0.30
-  be_after_R: 1.0
-  trail_k_before: 1.8
-  trail_k_after: 1.2
-  max_bars_in_trade: 120
-  pyramiding: false
-  add_unit_R: 1.25
-  max_units: 3
+  atr_k_sl: 1.5        # SL על בסיס ATR
+  r1_R: 1.0            # TP1 יחסי ל-R (אפשר 1.0 כדי לראות מימושים ראשונים מהר)
+  r2_R: 2.0            # TP2
+  p1_pct: 0.5          # סוגרים חצי ב-TP1
+  p2_pct: 0.5          # סוגרים את החצי השני ב-TP2
+  be_after_R: 0.8      # העבר ל-B/E מהר כדי לאבטח
+  trail_atr_k: 1.2
+  max_bars_in_trade: 48
