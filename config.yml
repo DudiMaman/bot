@@ -18,7 +18,6 @@ live_connectors:
       - "BNB/USDT"
       - "TRX/USDT"
       - "XLM/USDT"
-      - "BCH/USDT"
       - "SUI/USDT"
       - "HBAR/USDT"
       - "LTC/USDT"
@@ -69,3 +68,4 @@ portfolio:
   equity0: 100000
   risk_per_trade: 0.005      # 0.5% לסיכון לעסקה
   max_position_pct: 0.10     # לא יותר מ-10% הון בפוזיציה
+
