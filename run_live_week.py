@@ -79,7 +79,7 @@ def main():
     # 3) יצירת חיבורים לפי live_connectors בקובץ הקונפיג
     conns = []
     for c in cfg['live_connectors']:
-        if c['type'] == 'ccxt':
+    if c['type'] == 'ccxt':
             conn = CCXTConnector(
                 c['exchange_id'],
                 paper=c.get('paper', True),
@@ -248,6 +248,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
