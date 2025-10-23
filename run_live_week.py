@@ -75,7 +75,6 @@ clean_s = {k: v for k, v in raw_s.items() if k in accepted}
 # כעת נבנה את האסטרטגיה — בלי לזרוק שגיאה על פרמטרים שאינם קיימים
 strat = DonchianTrendADXRSI(**clean_s)
 tm = TradeManager(**cfg['trade_manager'])
-
 equity = float(cfg['portfolio']['equity0'])
 rm = RiskManager(equity, cfg['portfolio']['risk_per_trade'], cfg['portfolio']['max_position_pct'])
 
@@ -232,6 +231,7 @@ rm = RiskManager(equity, cfg['portfolio']['risk_per_trade'], cfg['portfolio']['m
 
 if __name__ == "__main__":
     main()
+
 
 
 
