@@ -19,12 +19,24 @@ class CCXTConnector(BaseConnector):
         if self.paper and hasattr(self.exchange, 'set_sandbox_mode'):
             self.exchange.set_sandbox_mode(True)
         self.exchange.load_markets()
+        
+    def fetch_ohlcv(self, symbol, timeframe="15m", limit=600):
+        try:
+            raw = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        except (ccxt.BadSymbol, ccxt.BadRequest, ccxt.ExchangeError) as e:
+            print(f"[{self.exchange.id}] skip {symbol}: {type(e).__name__}: {e}")
+            import pandas as pd
+            # מחזיר DataFrame ריק עם כותרות צפויות
+            return pd.DataFrame(columns=["open","high","low","close","volume"])
+        except Exception as e:
+            print(f"[{self.exchange.id}] unexpected error for {symbol}: {type(e).__name__}: {e}")
+            import pandas as pd
+            return pd.DataFrame(columns=["open","high","low","close","volume"])
 
-    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 600) -> pd.DataFrame:
-        raw = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        df = pd.DataFrame(raw, columns=['ts','open','high','low','close','volume'])
-        df['ts'] = pd.to_datetime(df['ts'], unit='ms')
-        df.set_index('ts', inplace=True)
+        import pandas as pd
+        df = pd.DataFrame(raw, columns=["timestamp","open","high","low","close","volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        df = df.set_index("timestamp")
         return df
 
     def create_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
