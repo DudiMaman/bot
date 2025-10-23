@@ -4,7 +4,6 @@ live_connectors:
     exchange_id: bybit
     paper: true
     default_type: spot
-    # הוסף עוד סימבולים פופולריים (ודא שהם קיימים ב-Bybit Testnet)
     symbols:
       - "BTC/USDT"
       - "ETH/USDT"
@@ -21,68 +20,52 @@ live_connectors:
       - "XLM/USDT"
       - "BCH/USDT"
       - "SUI/USDT"
-      - "AVAX/USDT"
       - "HBAR/USDT"
       - "LTC/USDT"
       - "SHIB/USDT"
-      - "XMR/USDT"
       - "TON/USDT"
-      - "DAI/USDT"
       - "MNT/USDT"
       - "CRO/USDT"
       - "AAVE/USDT"
-      - "OKB/USDT"
-      - "WLFI/USDT"
-      - "ENA/USDT"
       - "PEPE/USDT"
       - "NEAR/USDT"
-      - "APT/USDT"
       - "ETC/USDT"
       - "ONDO/USDT"
-      - "ASTER/USDT"
-      - "POL/USDT"
-      - "WLD/USDT"
-      - "IP/USDT"
       - "ARB/USDT"
       - "ICP/USDT"
       - "ALGO/USDT"
       - "ATOM/USDT"
       - "VET/USDT"
       - "KAS/USDT"
-      - "PUMP/USDT"
-      - "PENGU/USDT"
-      - "FLR/USDT"
-      - "RENDER/USDT"
       - "SEI/USDT"
-      - "TRUMP/USDT"
       - "XDC/USDT"
       - "FIL/USDT"
       - "QNT/USDT"
-      - "CAKE/USDT"
       - "INJ/USDT"
       - "TIA/USDT"
       - "OP/USDT"
-      - "AERO/USDT"
-      - "FLOKI/USDT"
       - "GRT/USDT"
-      - "IOTA/USDT"    # תקצר טיימפריים כדי לקבל יותר אירועים
+      - "IOTA/USDT"
     timeframe: "15m"
     htf_timeframe: "1h"
 
 strategy:
-  donchian_len: 20
-  adx_min: 14          # היה 18–20; הורדנו כדי לראות יותר סיגנלים
-  rsi_buy: 55          # היה 60; הורדנו מעט
-  rsi_sell: 45         # היה 40; העלינו מעט
+  donchian_len: 20       # ← השם הנכון
+  adx_min: 14
+  rsi_buy: 55
+  rsi_sell: 45
 
 trade_manager:
-  atr_k_sl: 1.5        # SL על בסיס ATR
-  r1_R: 1.0            # TP1 יחסי ל-R (אפשר 1.0 כדי לראות מימושים ראשונים מהר)
-  r2_R: 2.0            # TP2
-  p1_pct: 0.5          # סוגרים חצי ב-TP1
-  p2_pct: 0.5          # סוגרים את החצי השני ב-TP2
-  be_after_R: 0.8      # העבר ל-B/E מהר כדי לאבטח
+  atr_k_sl: 1.5
+  r1_R: 1.0
+  r2_R: 2.0
+  p1_pct: 0.5
+  p2_pct: 0.5
+  be_after_R: 0.8
   trail_atr_k: 1.2
   max_bars_in_trade: 48
 
-
+portfolio:
+  equity0: 100000
+  risk_per_trade: 0.005      # 0.5% לסיכון לעסקה
+  max_position_pct: 0.10     # לא יותר מ-10% הון בפוזיציה
