@@ -138,6 +138,21 @@ def main():
             continue
 
         conn.init()
+        
+        # ✅ סינון אוטומטי: השאר רק סימבולים שבאמת קיימים ב-Bybit Testnet
+        available = set(conn.exchange.symbols)  # נטען ע"י load_markets()
+        requested = c.get('symbols', [])
+        valid = [s for s in requested if s in available]
+        dropped = [s for s in requested if s not in available]
+        if dropped:
+            print(f"[{c['name']}] Dropped unsupported symbols: {', '.join(dropped)}")
+        c['symbols'] = valid
+
+        # אם לא נשארו סימבולים — דלג על הקונקטור הזה
+        if not c['symbols']:
+            print(f"[{c['name']}] No valid symbols left, skipping connector.")
+            continue
+
         conns.append((c, conn))
 
     # 4) אתחל קובצי לוג
@@ -293,6 +308,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
