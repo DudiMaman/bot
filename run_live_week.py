@@ -66,9 +66,23 @@ def main():
 
     # 2) בנה את המחלקות (שימו לב: מחוץ ל-with וללא הזחה נוספת)
     strat = DonchianTrendADXRSI(**clean_s)
-    # --- בניית TradeManager באופן חסין ---
+    # --- יצירת TradeManager באופן חסין ממפתחות לא נתמכים ---
     import inspect
-    raw_tm = dict(cfg.get('trade_manager', {}))
+
+    raw_tm = dict(cfg.get('trade_manager', {}))  # מה- config.yml
+
+    # השאר רק מפתחות שהקונסטרקטור של TradeManager באמת מכיר
+    accepted_tm = set(inspect.signature(TradeManager).parameters.keys())
+    clean_tm = {k: v for k, v in raw_tm.items() if k in accepted_tm}
+
+    tm = TradeManager(**clean_tm)
+
+    # אם יש trail_atr_k בקונפיג אבל הוא לא נתמך בקונסטרקטור, נזריק אותו כאטריביוט (אופציונלי)
+    if 'trail_atr_k' in raw_tm and 'trail_atr_k' not in clean_tm and not hasattr(tm, 'trail_atr_k'):
+        try:
+            setattr(tm, 'trail_atr_k', raw_tm['trail_atr_k'])
+        except Exception:
+            pass
 
     # אליאסים אפשריים -> לשמות שהמחלקה באמת מכירה (אם יש הבדלים)
     alias_map_tm = {
@@ -279,6 +293,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
