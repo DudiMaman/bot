@@ -181,6 +181,7 @@ def main():
             for sym in c_cfg.get('symbols', []):
                 ltf_df = conn.fetch_ohlcv(sym, tf, limit=600)
                 htf_df = conn.fetch_ohlcv(sym, htf, limit=600)
+                if ltf_df is None or ltf_df.empty or htf_df is None or htf_df.empty:
                 feats = prepare_features(ltf_df, htf_df, strat)
                 last = feats.iloc[-1]
                 key = (c_cfg['name'], sym)
@@ -308,6 +309,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
