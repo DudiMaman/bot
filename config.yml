@@ -4,8 +4,7 @@ live_connectors:
     exchange_id: bybit
     paper: true
     default_type: spot
-    # הוסף עוד סימבולים פופולריים (ודא שהם קיימים ב-Bybit Testnet):
-    symbols:
+    # הוסף עוד סימבולים פופולריים (ודא שהם קיימים ב-Bybit Testnet)
     symbols:
       - "BTC/USDT"
       - "ETH/USDT"
@@ -85,4 +84,5 @@ trade_manager:
   be_after_R: 0.8      # העבר ל-B/E מהר כדי לאבטח
   trail_atr_k: 1.2
   max_bars_in_trade: 48
+
 
