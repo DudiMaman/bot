@@ -57,7 +57,27 @@ if 'strategy' in cfg:
 
 
     # 2) בנה את המחלקות
-    strat = DonchianTrendADXRSI(**cfg['strategy'])
+# נבנה dict נקי רק עם הפרמטרים שהקלאס באמת מכיר
+raw_s = dict(cfg.get('strategy', {}))
+
+# מיפוי כינויים נפוצים לשמות הנכונים (אם קיימים אצלך בקונפיג)
+alias_map = {
+    'donchian_window': 'donchian_len',
+    'adx_minimum': 'adx_min',
+    # אם בעתיד יתברר מה שמות הפרמטרים המדויקים ל-RSI בקלאס, נוכל למפות:
+    # 'rsi_buy': 'rsi_long',   # דוגמה אפשרית
+    # 'rsi_sell': 'rsi_short', # דוגמה אפשרית
+}
+for old, new in alias_map.items():
+    if old in raw_s and new not in raw_s:
+        raw_s[new] = raw_s.pop(old)
+
+# נשאיר רק מפתחות שהקלאס תומך בהם בפועל
+accepted = set(inspect.signature(DonchianTrendADXRSI).parameters.keys())
+clean_s = {k: v for k, v in raw_s.items() if k in accepted}
+
+# כעת נבנה את האסטרטגיה — בלי לזרוק שגיאה על פרמטרים שאינם קיימים
+strat = DonchianTrendADXRSI(**clean_s)
     tm = TradeManager(**cfg['trade_manager'])
 
     equity = float(cfg['portfolio']['equity0'])
@@ -216,5 +236,6 @@ if 'strategy' in cfg:
 
 if __name__ == "__main__":
     main()
+
 
 
