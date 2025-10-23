@@ -66,7 +66,37 @@ def main():
 
     # 2) בנה את המחלקות (שימו לב: מחוץ ל-with וללא הזחה נוספת)
     strat = DonchianTrendADXRSI(**clean_s)
-    tm = TradeManager(**cfg['trade_manager'])
+    # --- בניית TradeManager באופן חסין ---
+    import inspect
+    raw_tm = dict(cfg.get('trade_manager', {}))
+
+    # אליאסים אפשריים -> לשמות שהמחלקה באמת מכירה (אם יש הבדלים)
+    alias_map_tm = {
+        'r1_R': 'r1_R',
+        'r2_R': 'r2_R',
+        'p1_pct': 'p1_pct',
+        'p2_pct': 'p2_pct',
+        'atr_k_sl': 'atr_k_sl',
+        'be_after_R': 'be_after_R',
+        'trail_atr_k': 'trail_atr_k',      # אם למחלקה אין פרמטר כזה בקונסטרקטור, נסנן בהמשך
+        'max_bars_in_trade': 'max_bars_in_trade',
+    }
+    for old, new in alias_map_tm.items():
+        if old in raw_tm and new not in raw_tm:
+            raw_tm[new] = raw_tm.pop(old)
+
+    # נשאיר רק פרמטרים שהקונסטרקטור של TradeManager באמת מכיר
+    accepted_tm = set(inspect.signature(TradeManager).parameters.keys())
+    clean_tm = {k: v for k, v in raw_tm.items() if k in accepted_tm}
+
+    tm = TradeManager(**clean_tm)
+
+    # אם בקונפיג יש trail_atr_k אבל הקונסטרקטור לא תומך, נזריק כתכונה (לא חובה)
+    if 'trail_atr_k' in raw_tm and 'trail_atr_k' not in clean_tm and not hasattr(tm, 'trail_atr_k'):
+        try:
+            setattr(tm, 'trail_atr_k', raw_tm['trail_atr_k'])
+        except Exception:
+            pass
 
     # פורטפוליו (נדרש בקונפיג: portfolio: equity0, risk_per_trade, max_position_pct)
     equity = float(cfg['portfolio']['equity0'])
@@ -249,6 +279,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
