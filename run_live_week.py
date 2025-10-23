@@ -76,8 +76,8 @@ clean_s = {k: v for k, v in raw_s.items() if k in accepted}
 strat = DonchianTrendADXRSI(**clean_s)
 tm = TradeManager(**cfg['trade_manager'])
 
-    equity = float(cfg['portfolio']['equity0'])
-    rm = RiskManager(equity, cfg['portfolio']['risk_per_trade'], cfg['portfolio']['max_position_pct'])
+equity = float(cfg['portfolio']['equity0'])
+rm = RiskManager(equity, cfg['portfolio']['risk_per_trade'], cfg['portfolio']['max_position_pct'])
 
     # 3) יצירת חיבורים לפי live_connectors בקובץ הקונפיג
     conns = []
@@ -232,6 +232,7 @@ tm = TradeManager(**cfg['trade_manager'])
 
 if __name__ == "__main__":
     main()
+
 
 
 
