@@ -45,6 +45,15 @@ def main():
     load_dotenv()
     with open('config.yml','r', encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
+    with open('config.yml','r', encoding='utf-8') as f:
+    cfg = yaml.safe_load(f)
+
+# ✅ תיקון אוטומטי לשם פרמטר ישן בקובץ הקונפיג
+if 'strategy' in cfg:
+    s = cfg['strategy']
+    if 'donchian_window' in s and 'donchian_len' not in s:
+        s['donchian_len'] = s.pop('donchian_window')
+
 
     # 2) בנה את המחלקות
     strat = DonchianTrendADXRSI(**cfg['strategy'])
@@ -206,3 +215,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
