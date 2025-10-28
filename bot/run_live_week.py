@@ -202,6 +202,15 @@ def main():
         snapshots = {}
 
         # משיכת נתונים
+                # כיבוד מצב Pause/Stop
+        st = get_status()
+        if st == "paused":
+            time.sleep(15)
+            continue
+        if st == "stopped":
+            notify("SYSTEM", {"msg": "Bot stopped by control"}, level="WARN")
+            return  # או break
+
         for c_cfg, conn in conns:
             tf = c_cfg['timeframe']
             htf = c_cfg['htf_timeframe']
@@ -215,6 +224,15 @@ def main():
                 snapshots[key] = last
 
         # בדיקת התקדמות בר חדש
+                # כיבוד מצב Pause/Stop
+        st = get_status()
+        if st == "paused":
+            time.sleep(15)
+            continue
+        if st == "stopped":
+            notify("SYSTEM", {"msg": "Bot stopped by control"}, level="WARN")
+            return  # או break
+
         progressed_any = False
         for key, row in snapshots.items():
             ts = row.name
@@ -229,6 +247,15 @@ def main():
             continue
 
         # --- ניהול פוזיציות פתוחות ---
+                # כיבוד מצב Pause/Stop
+        st = get_status()
+        if st == "paused":
+            time.sleep(15)
+            continue
+        if st == "stopped":
+            notify("SYSTEM", {"msg": "Bot stopped by control"}, level="WARN")
+            return  # או break
+
         to_close = []
         for key, pos in list(open_positions.items()):
             row = snapshots.get(key)
@@ -290,6 +317,15 @@ def main():
             open_positions.pop(key, None)
 
         # --- כניסות חדשות ---
+                # כיבוד מצב Pause/Stop
+        st = get_status()
+        if st == "paused":
+            time.sleep(15)
+            continue
+        if st == "stopped":
+            notify("SYSTEM", {"msg": "Bot stopped by control"}, level="WARN")
+            return  # או break
+
         for c_cfg, _ in conns:
             for sym in c_cfg.get('symbols', []):
                 key = (c_cfg['name'], sym)
@@ -326,6 +362,15 @@ def main():
                 rows_trades.append([now_utc.isoformat(), key[0], key[1], "ENTER", side, f"{price:.8f}", f"{qty:.8f}", "", f"{equity:.2f}"])
 
         # כתיבת לוגים
+                # כיבוד מצב Pause/Stop
+        st = get_status()
+        if st == "paused":
+            time.sleep(15)
+            continue
+        if st == "stopped":
+            notify("SYSTEM", {"msg": "Bot stopped by control"}, level="WARN")
+            return  # או break
+
         if rows_trades:
             write_csv(trades_path, ["time","connector","symbol","type","side","price","qty","pnl","equity"], rows_trades)
         write_csv(equity_path, ["time","equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
