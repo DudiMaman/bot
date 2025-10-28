@@ -1,7 +1,7 @@
 # ==========================================================
 # bot/run_live_week.py — גרסת ריצה יציבה לבוט
 # - טוען קונפיג בצורה בטוחה (מהתיקייה של הקובץ)
-# - מסנן פרמטרים לא נתמכים לאסטרטגיה (לא נופלים על rsi_buy/rsi_sell)
+# - מסנן פרמטרים לא נתמכים לאסטרטגיה ול-TradeManager
 # - מייבא קונקטורים ויוצר אותם בצורה נקייה
 # - מתמודד עם זוגות חסרים/שגויים בלי להפיל את התהליך
 # - כותב לוגים תחת bot/logs
@@ -85,17 +85,23 @@ def main():
 
     # 2) אסטרטגיה — סינון פרמטרים לא מוכרים (מונע TypeError)
     raw_s = cfg.get("strategy", {}) or {}
-    accepted = set(inspect.signature(DonchianTrendADXRSI).parameters.keys())
-    clean_s = {k: v for k, v in raw_s.items() if k in accepted}
-    unknown = sorted(set(raw_s) - accepted)
-    if unknown:
-        print("⚠️ Ignoring unknown strategy keys:", unknown)
+    accepted_s = set(inspect.signature(DonchianTrendADXRSI).parameters.keys())
+    clean_s = {k: v for k, v in raw_s.items() if k in accepted_s}
+    unknown_s = sorted(set(raw_s) - accepted_s)
+    if unknown_s:
+        print("⚠️ Ignoring unknown strategy keys:", unknown_s)
 
     strat = DonchianTrendADXRSI(**clean_s)
 
-    # 3) מנהלי סיכון/טריידים
-    trade_cfg = cfg.get("trade_manager", {}) or {}
-    tm = TradeManager(**trade_cfg)
+    # 3) מנהלי סיכון/טריידים — סינון פרמטרים לא מוכרים גם כאן
+    raw_tm = cfg.get("trade_manager", {}) or {}
+    accepted_tm = set(inspect.signature(TradeManager).parameters.keys())
+    clean_tm = {k: v for k, v in raw_tm.items() if k in accepted_tm}
+    unknown_tm = sorted(set(raw_tm) - accepted_tm)
+    if unknown_tm:
+        print("⚠️ Ignoring unknown trade_manager keys:", unknown_tm)
+
+    tm = TradeManager(**clean_tm)
 
     portfolio = cfg.get("portfolio", {}) or {}
     equity = float(portfolio.get("equity0", 100000.0))
