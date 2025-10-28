@@ -53,7 +53,14 @@ def main():
         cfg = yaml.safe_load(f)
 
     # ✅ אסטרטגיה וניהול סיכונים
-    strat = DonchianTrendADXRSI(**cfg['strategy'])
+    import inspect
+raw_s = cfg.get('strategy', {})
+accepted = set(inspect.signature(DonchianTrendADXRSI).parameters.keys())
+clean_s = {k: v for k, v in raw_s.items() if k in accepted}
+if len(clean_s) < len(raw_s):
+    print("⚠️ Ignoring unknown strategy keys:", sorted(set(raw_s) - accepted))
+strat = DonchianTrendADXRSI(**clean_s)
+
     tm = TradeManager(**cfg['trade_manager'])
 
     equity = float(cfg['portfolio']['equity0'])
