@@ -11,7 +11,11 @@ class CCXTConnector(BaseConnector):
         self.exchange = None
 
     def init(self):
-        self.exchange = getattr(ccxt, self.exchange_id)({'enableRateLimit': True})
+        # הערה: ב-testnet, ccxt משתמש ב־'bybit' עם enableRateLimit; 
+        # אם תרצה testnet אמיתי צריך לעדכן params/urls – אבל לשלב הזה נטען שווקים.
+        self.exchange = getattr(ccxt, self.exchange_id)({
+            'enableRateLimit': True,
+        })
         self.exchange.load_markets()
 
     def fetch_ohlcv(self, symbol, timeframe='15m', limit=500):
