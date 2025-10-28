@@ -1,3 +1,30 @@
+import os, json, requests, traceback, time
+MONITOR_URL = os.getenv("MONITOR_URL")         # נזין ב-Render
+MONITOR_API_KEY = os.getenv("MONITOR_API_KEY") # נזין ב-Render
+
+def notify(event_type: str, payload: dict, level="INFO", source="bot"):
+    """שליחת אירועים למוניטור (לא מפיל את הבוט אם נכשל)"""
+    try:
+        if not MONITOR_URL:
+            return
+        headers = {"Content-Type": "application/json"}
+        if MONITOR_API_KEY:
+            headers["X-MONITOR-KEY"] = MONITOR_API_KEY
+        requests.post(
+            f"{MONITOR_URL}/ingest",
+            json={"event_type": event_type, "level": level, "source": source, "payload": payload},
+            headers=headers, timeout=4
+        )
+    except Exception:
+        pass
+
+def get_status():
+    """שליפת סטטוס ריצה מהמוניטור: running|paused|stopped"""
+    try:
+        r = requests.get(f"{MONITOR_URL}/status", timeout=4)
+        return r.json().get("status", "running")
+    except Exception:
+        return "running"
 import inspect
 import yaml, time, math, os, csv
 import pandas as pd
