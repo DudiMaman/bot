@@ -1,13 +1,12 @@
 # bot/run_live_week.py
 # ------------------------------------------------------------
-# בוט בסיסי לריצה רציפה כשבוע, עם:
-# - סינון מפתחות חוקיים ל-DonchianTrendADXRSI ול-TradeManager
-# - סינון סימבולים שאינם קיימים בפועל ב-Bybit Testnet
-# - עיטוף משיכת נתונים ב-try/except כדי למנוע קריסות
-# - לוגים מסודרים ל-logs/trades.csv ו-logs/equity_curve.csv
+# Trading bot (weekly loop) with:
+# - Safe filtering of config keys for DonchianTrendADXRSI / TradeManager
+# - Valid symbol filtering from exchange (Bybit testnet via CCXT)
+# - Robust try/except around data fetches (no crashes on single symbol failure)
+# - Dual logging: CSV files + optional Postgres via DB if DATABASE_URL is set
 # ------------------------------------------------------------
 
-from bot.db_writer import DB
 import os
 import sys
 import math
@@ -19,26 +18,30 @@ import pandas as pd
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# הבטחת נתיב ייבוא תקין גם בהרצה כקובץ וגם כמודול
+# Ensure local package imports work both "python -m bot.run_live_week" and direct
 THIS_DIR = os.path.dirname(__file__)
+ROOT_DIR = os.path.dirname(THIS_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 if THIS_DIR not in sys.path:
     sys.path.append(THIS_DIR)
 
-# ייבוא רכיבי הבוט מתוך החבילה bot
+# Bot package imports
 from bot.strategies import DonchianTrendADXRSI
 from bot.risk import RiskManager, TradeManager
 from bot.utils import atr as calc_atr
 from bot.connectors.ccxt_connector import CCXTConnector
+from bot.db_writer import DB  # provides write_trades(List[List]), write_equity({time, equity})
 
-# Alpaca הוא אופציונלי — אין בעיה אם לא קיים
+# Optional Alpaca connector
 try:
     from bot.connectors.alpaca_connector import AlpacaConnector
 except Exception:
     AlpacaConnector = None
 
+# Paths for CSV logging
 LOG_DIR = os.path.join(THIS_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
-
 TRADES_CSV = os.path.join(LOG_DIR, "trades.csv")
 EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
 
@@ -66,10 +69,7 @@ def resample_htf(df: pd.DataFrame, htf: str) -> pd.DataFrame:
 
 
 def prepare_features(ltf_df: pd.DataFrame, htf_df: pd.DataFrame, strat: DonchianTrendADXRSI) -> pd.DataFrame:
-    """
-    קורא ל-prepare של האסטרטגיה, ומוסיף ATR מהטיים-פריים הנמוך (ltf).
-    נדרש שהאסטרטגיה תחזיר DataFrame עם אינדקס זמן ועמודות close/long_setup/short_setup לפחות.
-    """
+    """Call strategy.prepare() and attach ATR(14) from LTF."""
     f = strat.prepare(ltf_df, htf_df)
     f["atr"] = calc_atr(ltf_df, 14)
     return f
@@ -79,52 +79,28 @@ def prepare_features(ltf_df: pd.DataFrame, htf_df: pd.DataFrame, strat: Donchian
 # Main
 # ------------------------------------------------------------
 def main():
-    # 1) טען משתני סביבה וקובץ קונפיג
+    # 1) Load env + config
     load_dotenv()
-    with open('bot/config.yml', 'r', encoding='utf-8') as f:
-        cfg = yaml.safe_load(f)
+    with open(os.path.join(THIS_DIR, "config.yml"), "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
 
-    # 2) אתחול מסד נתונים
-    from bot.db_writer import DB
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    db = DB(DATABASE_URL)
+    # 2) Init DB if available
+    db = None
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        try:
+            db = DB(database_url)
+        except Exception as e:
+            print(f"[WARN] DB init failed: {e}")
+            db = None
 
-    # 3) אתחול אסטרטגיה ומנהלי סיכון
-    strat_cfg = cfg['strategy']
-    trade_cfg = cfg['trade_manager']
-    portfolio_cfg = cfg['portfolio']
-
-    strat = DonchianTrendADXRSI(**{k: v for k, v in strat_cfg.items() if k in DonchianTrendADXRSI.__init__.__code__.co_varnames})
-    tm = TradeManager(**{k: v for k, v in trade_cfg.items() if k in TradeManager.__init__.__code__.co_varnames})
-
-    equity = float(portfolio_cfg['equity0'])
-    rm = RiskManager(equity, portfolio_cfg['risk_per_trade'], portfolio_cfg['max_position_pct'])
-
-    # 4) כתיבת equity ראשונית למסד
-    now_utc = datetime.now(timezone.utc)
-    try:
-        db.write_equity({
-            "time": now_utc.isoformat(),
-            "equity": float(f"{equity:.2f}")
-        })
-    except Exception as e:
-        print(f"[WARN] DB write_equity init failed: {e}")
-        from bot.db_writer import DB  # אם כבר קיים למעלה – אל תוסיף שוב
-
-# אחרי טעינת הקונפיג/ENV:
-db = DB(os.getenv("DATABASE_URL"))
-
-
-    # 2) בנה אסטרטגיה ו-TradeManager עם סינון מפתחות חוקיים בלבד
-    import inspect
-
+    # 3) Build Strategy / TradeManager with safe filtering of keys
     raw_s = cfg.get("strategy", {}) or {}
     accepted_s = set(inspect.signature(DonchianTrendADXRSI).parameters.keys())
     clean_s = {k: v for k, v in raw_s.items() if k in accepted_s}
     unknown_s = sorted(set(raw_s.keys()) - accepted_s)
     if unknown_s:
         print(f"⚠️ Ignoring unknown strategy keys: {unknown_s}")
-
     strat = DonchianTrendADXRSI(**clean_s)
 
     raw_t = cfg.get("trade_manager", {}) or {}
@@ -133,10 +109,9 @@ db = DB(os.getenv("DATABASE_URL"))
     unknown_t = sorted(set(raw_t.keys()) - accepted_t)
     if unknown_t:
         print(f"⚠️ Ignoring unknown trade_manager keys: {unknown_t}")
-
     tm = TradeManager(**clean_t)
 
-    # 3) הגדר פורטפוליו
+    # 4) Portfolio
     portfolio = cfg.get("portfolio", {}) or {}
     equity = float(portfolio.get("equity0", 100_000.0))
     rm = RiskManager(
@@ -145,10 +120,18 @@ db = DB(os.getenv("DATABASE_URL"))
         max_position_pct=float(portfolio.get("max_position_pct", 0.10)),
     )
 
-    # 4) יצירת חיבורים בהתאם להגדרות בקונפיג + סינון סימבולים קיימים בפועל
+    # 5) Initial equity log (CSV + DB if available)
+    now_utc = datetime.now(timezone.utc)
+    write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
+    if db:
+        try:
+            db.write_equity({"time": now_utc.isoformat(), "equity": float(f"{equity:.2f}")})
+        except Exception as e:
+            print(f"[WARN] DB write_equity init failed: {e}")
+
+    # 6) Build connectors + filter valid symbols from exchange
     conns: list[tuple[dict, object]] = []
     live_connectors = cfg.get("live_connectors", []) or []
-
     for c in live_connectors:
         ctype = c.get("type")
         if ctype == "ccxt":
@@ -166,14 +149,12 @@ db = DB(os.getenv("DATABASE_URL"))
             print(f"ℹ️ Unknown connector type '{ctype}' — skipping.")
             continue
 
-        # init בורסה
         try:
             conn.init()
         except Exception as e:
             print(f"❌ init() failed for connector {c.get('name','?')}: {repr(e)}")
             continue
 
-        # סינון סימבולים לפי מה שבאמת קיים לשוק הזה
         available = set(getattr(conn.exchange, "symbols", []) or [])
         cfg_syms = list(c.get("symbols", []) or [])
         valid_syms = [s for s in cfg_syms if s in available]
@@ -189,29 +170,27 @@ db = DB(os.getenv("DATABASE_URL"))
                 f"(of {len(cfg_syms)} requested)."
             )
 
-        # נעדכן את עותק הקונפיג של הקונקטור כדי שהלולאה תשתמש רק ב-valid_syms
         c_local = dict(c)
         c_local["symbols"] = valid_syms
         conns.append((c_local, conn))
 
-    # 5) אתחל לוגים
+    # 7) Init CSV trades header
     write_csv(TRADES_CSV, ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"], [])
-    write_csv(EQUITY_CSV, ["time", "equity"], [[datetime.now(timezone.utc).isoformat(), f"{equity:.2f}"]])
 
-    # משתני ריצה
-    open_positions: dict = {}   # key=(connector_name, symbol)
+    # Runtime state
+    open_positions: dict = {}   # key=(connector_name, symbol) -> position dict
     cooldowns: dict = {}
     last_bar_ts: dict = {}
     start_time = time.time()
     SECONDS_IN_WEEK = 7 * 24 * 60 * 60
 
-    # 6) לולאת ריצה
+    # 8) Main loop
     while True:
         now_utc = datetime.now(timezone.utc)
         rows_trades = []
-
-        # --- שלב משיכת נתונים והפקת פיצ'רים ---
         snapshots: dict = {}  # key -> last row of features
+
+        # Fetch & features
         for c_cfg, conn in conns:
             tf = c_cfg.get("timeframe", "15m")
             htf = c_cfg.get("htf_timeframe", "1h")
@@ -227,21 +206,28 @@ db = DB(os.getenv("DATABASE_URL"))
                     print(f"⏭️ skip {sym}: {repr(e)}")
                     continue
 
-        # בדיקה שהתחדש נר כלשהו (כדי לא לעשות חישובים חוזרים)
+        # Progress check (new bars?)
         progressed_any = False
         for key, row in snapshots.items():
             ts = row.name
             if last_bar_ts.get(key) != ts:
                 last_bar_ts[key] = ts
                 progressed_any = True
+
         if not progressed_any:
-            # אין חדש — נחכה קצת ונמשיך
             time.sleep(15)
             if time.time() - start_time >= SECONDS_IN_WEEK:
                 break
+            # still log equity periodically
+            write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
+            if db:
+                try:
+                    db.write_equity({"time": now_utc.isoformat(), "equity": float(f"{equity:.2f}")})
+                except Exception as e:
+                    print(f"[WARN] DB write_equity loop failed: {e}")
             continue
 
-        # --- ניהול פוזיציות פתוחות ---
+        # Manage open positions
         to_close = []
         for key, pos in list(open_positions.items()):
             row = snapshots.get(key)
@@ -255,7 +241,7 @@ db = DB(os.getenv("DATABASE_URL"))
             qty = pos["qty"]
             R = pos["R"]
 
-            # טריילינג לפי ATR
+            # Trailing by ATR
             if atr_now:
                 trail = tm.trail_level(side, price, atr_now, after_tp1=pos["tp1_done"])
                 if side == "long":
@@ -263,7 +249,7 @@ db = DB(os.getenv("DATABASE_URL"))
                 else:
                     pos["sl"] = min(pos["sl"], trail)
 
-            # העברת SL ל-B/E אחרי be_after_R * R
+            # Move to BE
             if not pos["moved_to_be"] and atr_now:
                 if side == "long" and price >= entry + tm.be_after_R * R:
                     pos["sl"] = max(pos["sl"], entry)
@@ -298,7 +284,7 @@ db = DB(os.getenv("DATABASE_URL"))
                     [now_utc.isoformat(), key[0], key[1], "TP2", side, f"{price:.8f}", f"{close_qty:.8f}", f"{pnl:.2f}", f"{equity:.2f}"]
                 )
 
-            # פגיעה ב-SL
+            # Stop-loss
             if (side == "long" and price <= pos["sl"]) or (side == "short" and price >= pos["sl"]):
                 price_exit = pos["sl"]
                 pnl = (price_exit - entry) * pos["qty"] if side == "long" else (entry - price_exit) * pos["qty"]
@@ -308,7 +294,7 @@ db = DB(os.getenv("DATABASE_URL"))
                 )
                 to_close.append(key)
 
-            # יציאה בכוח אחרי מספר נרות מקסימלי
+            # Time-based exit
             pos["bars"] += 1
             if pos["bars"] >= tm.max_bars_in_trade and not pos["tp2_done"]:
                 pnl = (price - entry) * pos["qty"] if side == "long" else (entry - price) * pos["qty"]
@@ -321,9 +307,8 @@ db = DB(os.getenv("DATABASE_URL"))
         for key in to_close:
             open_positions.pop(key, None)
 
-        # --- כניסות חדשות ---
+        # Entries
         for c_cfg, _ in conns:
-            tf = c_cfg.get("timeframe", "15m")
             for sym in c_cfg.get("symbols", []):
                 key = (c_cfg.get("name", "ccxt"), sym)
                 if key in open_positions:
@@ -336,7 +321,6 @@ db = DB(os.getenv("DATABASE_URL"))
                 if row is None or pd.isna(row.get("atr")) or row["atr"] <= 0:
                     continue
 
-                # סיגנל אסטרטגיה
                 sig = 1 if row.get("long_setup") else (-1 if row.get("short_setup") else 0)
                 if sig == 0:
                     continue
@@ -345,13 +329,11 @@ db = DB(os.getenv("DATABASE_URL"))
                 atr_now = float(row["atr"])
                 side = "long" if sig == 1 else "short"
 
-                # הגדרת SL/TP ע"פ R ו-ATR
                 sl = price - tm.atr_k_sl * atr_now if side == "long" else price + tm.atr_k_sl * atr_now
                 R = (price - sl) if side == "long" else (sl - price)
                 if R <= 0:
                     continue
 
-                # גודל פוזיציה
                 qty_risk = (equity * rm.risk_per_trade) / R
                 qty_cap = (equity * rm.max_position_pct) / max(price, 1e-9)
                 qty = round_qty(max(0.0, min(qty_risk, qty_cap)))
@@ -378,16 +360,23 @@ db = DB(os.getenv("DATABASE_URL"))
                     [now_utc.isoformat(), key[0], key[1], "ENTER", side, f"{price:.8f}", f"{qty:.8f}", "", f"{equity:.2f}"]
                 )
 
-        # כתיבת לוגים
+        # Persist logs
         if rows_trades:
-            db.write_trades(rows_trades)
-        db.write_equity({
-    "time": now_utc.isoformat(),
-    "equity": float(f"{equity:.2f}")
-})
+            write_csv(TRADES_CSV, ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"], rows_trades)
+            if db:
+                try:
+                    db.write_trades(rows_trades)
+                except Exception as e:
+                    print(f"[WARN] DB write_trades failed: {e}")
 
+        write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
+        if db:
+            try:
+                db.write_equity({"time": now_utc.isoformat(), "equity": float(f"{equity:.2f}")})
+            except Exception as e:
+                print(f"[WARN] DB write_equity loop failed: {e}")
 
-        # סיום שבוע
+        # End-of-week stop
         if time.time() - start_time >= SECONDS_IN_WEEK:
             break
 
