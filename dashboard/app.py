@@ -1,245 +1,212 @@
+# dashboard/app.py
 import os
-from pathlib import Path
+import json
 from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template_string
-import pandas as pd
+import psycopg2
+import psycopg2.extras
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env var is missing")
 
 app = Flask(__name__)
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-LOG_DIR = BASE_DIR / "bot" / "logs"
-TRADES_CSV = LOG_DIR / "trades.csv"
-EQUITY_CSV = LOG_DIR / "equity_curve.csv"
-
-CONTROLS_DIR = BASE_DIR / "bot" / "controls"
-PAUSE_FLAG = CONTROLS_DIR / "pause.flag"
-CONTROLS_DIR.mkdir(parents=True, exist_ok=True)
-
-HEARTBEAT_MINUTES = 5
-
-
-def read_trades(limit=200):
-    if not TRADES_CSV.exists():
-        return []
-    try:
-        df = pd.read_csv(TRADES_CSV)
-    except Exception:
-        return []
-    if df.empty:
-        return []
-    keep = [c for c in ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"] if c in df.columns]
-    df = df[keep].tail(limit).iloc[::-1].reset_index(drop=True)
-    for col in ["price", "qty", "pnl", "equity"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df.to_dict(orient="records")
-
-
-def read_equity(limit=500):
-    if not EQUITY_CSV.exists():
-        return []
-    try:
-        df = pd.read_csv(EQUITY_CSV)
-    except Exception:
-        return []
-    if df.empty:
-        return []
-    df = df[["time", "equity"]].tail(limit).reset_index(drop=True)
-    df["equity"] = pd.to_numeric(df["equity"], errors="coerce")
-    return [{"time": str(r["time"]), "equity": float(r["equity"])} for _, r in df.iterrows()]
-
-
-def calc_daily_pnl(equity_points):
-    if not equity_points:
-        return []
-    df = pd.DataFrame(equity_points)
-    df["time"] = pd.to_datetime(df["time"], errors="coerce")
-    df = df.dropna(subset=["time", "equity"])
-    df["date"] = df["time"].dt.date
-    daily = df.groupby("date")["equity"].last().pct_change().fillna(0) * 100
-    return [{"date": str(d), "pnl_pct": round(v, 2)} for d, v in daily.items()]
-
-
-def is_paused():
-    return PAUSE_FLAG.exists()
-
-
-def heartbeat_status():
-    if not EQUITY_CSV.exists():
-        return {"running": False, "last_update": None, "paused": is_paused()}
-    mtime = datetime.fromtimestamp(EQUITY_CSV.stat().st_mtime, tz=timezone.utc)
-    delta = (datetime.now(timezone.utc) - mtime).total_seconds() / 60
-    return {"running": delta <= HEARTBEAT_MINUTES, "last_update": mtime.isoformat(), "paused": is_paused()}
-
-
-@app.get("/data")
-def data_api():
-    equity = read_equity(limit=500)
-    return jsonify({
-        "status": heartbeat_status(),
-        "trades": read_trades(limit=200),
-        "equity": equity,
-        "daily_pnl": calc_daily_pnl(equity),
-    })
-
-
-@app.post("/pause")
-def pause_api():
-    PAUSE_FLAG.write_text("paused\n", encoding="utf-8")
-    return jsonify({"ok": True, "paused": True})
-
-
-@app.post("/resume")
-def resume_api():
-    if PAUSE_FLAG.exists():
-        PAUSE_FLAG.unlink()
-    return jsonify({"ok": True, "paused": False})
-
-
-# -------------------- UI --------------------
-
-INDEX_HTML = """
+HTML = """
 <!doctype html>
 <html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trading Bot Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-    :root{--card-border:#eee; --muted:#666;}
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif; max-width:1300px; margin:24px auto; padding:0 12px;}
-    header{display:flex; flex-direction:column; gap:8px; margin-bottom:16px}
-    .row{display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
-    .pill{display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:20px; font-weight:600;}
-    .ok{background:#eaf7ee; color:#137333;}
-    .bad{background:#fdecec; color:#b00020;}
-    .warn{background:#fff6e6; color:#8a6d00;}
-    .btns{display:flex; gap:8px}
-    button{padding:8px 12px; border:1px solid #ddd; background:#fff; border-radius:10px; cursor:pointer}
-    button.primary{background:#111; color:#fff; border-color:#111}
-    .muted{color:var(--muted); font-size:12px}
-    h1{margin:0; font-size:22px;}
-    h2{margin:0 0 8px 0; font-size:18px}
-    .main-grid{display:grid; grid-template-columns:70% 30%; gap:16px;}
-    .card{border:1px solid var(--card-border); border-radius:12px; padding:14px; height:calc(100vh - 140px); overflow:auto;}
-    table{width:100%; border-collapse:collapse; font-size:14px}
-    th,td{padding:8px 6px; border-bottom:1px solid #eee; text-align:left}
-    th{background:#fafafa; position:sticky; top:0}
-    .charts{display:flex; flex-direction:column; gap:24px; height:100%;}
-    .chart-wrap{flex:1; display:flex; flex-direction:column;}
-    canvas{width:100%; flex:1;}
-    @media(max-width:900px){
-      .main-grid{grid-template-columns:1fr;}
-      .card{height:auto;}
-    }
+    body{ background: #0b1220; color:#e6e8ec; }
+    .card{ background:#111a2f; border:1px solid #1f2a44; border-radius:14px;}
+    .status-pill{ padding:.25rem .6rem; border-radius:999px; font-weight:600;}
+    .status-running{ background:#1f6feb33; color:#58a6ff; border:1px solid #1f6feb;}
+    .status-stopped{ background:#8b000033; color:#ff6b6b; border:1px solid #8b0000;}
+    .btn-outline-light{border-color:#2e3a5f;}
+    table thead th{ color:#cbd5e1; }
+    .muted{ color:#9aa4b2; font-size:.9rem; }
   </style>
 </head>
 <body>
-  <header>
-    <div class="row">
-      <h1>Trading Bot Dashboard</h1>
-      <div class="muted" id="refreshTime">Last refresh: --</div>
-    </div>
-    <div class="row">
-      <span id="status-pill" class="pill warn">Loading…</span>
-      <div class="btns">
-        <button id="resumeBtn" class="primary">Resume</button>
-        <button id="pauseBtn">Pause</button>
-      </div>
-      <div class="muted" id="lastUpdate"></div>
-    </div>
-  </header>
+<div class="container-fluid py-3">
 
-  <div class="main-grid">
-    <div class="card">
-      <h2>Recent Trades</h2>
-      <table id="tradesTable">
-        <thead>
-          <tr>
-            <th>Time</th><th>Connector</th><th>Symbol</th><th>Type</th><th>Side</th>
-            <th>Price</th><th>Qty</th><th>PnL</th><th>Equity</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="d-flex align-items-center gap-3">
+      <h3 class="m-0">Trading Bot Dashboard</h3>
+      <span id="statusPill" class="status-pill status-stopped">STOPPED</span>
     </div>
-
-    <div class="card charts">
-      <div class="chart-wrap">
-        <h2>Equity Curve</h2>
-        <canvas id="equityChart"></canvas>
-      </div>
-      <div class="chart-wrap">
-        <h2>Daily PnL (%)</h2>
-        <canvas id="pnlChart"></canvas>
+    <div class="text-end">
+      <div class="muted">
+        <span id="lastRefresh">–</span>
       </div>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script>
-    const REFRESH_EVERY_MS = 10000;
-    const pill = document.getElementById('status-pill');
-    const tbody = document.querySelector('#tradesTable tbody');
-    const lastUpdateEl = document.getElementById('lastUpdate');
-    const refreshTimeEl = document.getElementById('refreshTime');
-    let eqChart, pnlChart;
+  <div class="row g-3">
+    <!-- left: Trades table (70%) -->
+    <div class="col-lg-8">
+      <div class="card p-3">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <h5 class="m-0">Recent Trades</h5>
+        </div>
+        <div class="table-responsive" style="max-height: 70vh;">
+          <table class="table table-dark table-hover align-middle">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Conn</th>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>Side</th>
+                <th class="text-end">Price</th>
+                <th class="text-end">Qty</th>
+                <th class="text-end">PnL</th>
+                <th class="text-end">Equity</th>
+              </tr>
+            </thead>
+            <tbody id="tradesBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <!-- right: Equity chart (30%) -->
+    <div class="col-lg-4">
+      <div class="card p-3">
+        <h5>Equity Curve</h5>
+        <canvas id="equityChart" height="300"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
 
-    function makeLine(ctx,label,color='#111'){
-      return new Chart(ctx,{
-        type:'line',
-        data:{labels:[],datasets:[{label:label,data:[],borderColor:color,tension:0.2}]},
-        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}
-      });
+<script>
+let chart;
+
+function fmt(n, d=2){
+  if(n===null || n===undefined || isNaN(n)) return "";
+  return Number(n).toLocaleString(undefined, {maximumFractionDigits:d});
+}
+
+async function loadData(){
+  const r = await fetch('/data');
+  const data = await r.json();
+
+  // last refresh stamp
+  document.getElementById('lastRefresh').textContent = 'Last refresh: ' + data.now_iso;
+
+  // status pill
+  const pill = document.getElementById('statusPill');
+  pill.textContent = data.status;
+  pill.className = 'status-pill ' + (data.status === 'RUNNING' ? 'status-running' : 'status-stopped');
+
+  // trades
+  const tbody = document.getElementById('tradesBody');
+  tbody.innerHTML = '';
+  data.trades.forEach(t => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${t.time}</td>
+      <td>${t.connector}</td>
+      <td>${t.symbol}</td>
+      <td>${t.type}</td>
+      <td>${t.side}</td>
+      <td class="text-end">${fmt(t.price, 8)}</td>
+      <td class="text-end">${fmt(t.qty, 8)}</td>
+      <td class="text-end">${fmt(t.pnl, 2)}</td>
+      <td class="text-end">${fmt(t.equity, 2)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // equity
+  const labels = data.equity.map(p => p.time);
+  const values = data.equity.map(p => p.equity);
+  const ctx = document.getElementById('equityChart').getContext('2d');
+  if(chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Equity',
+        data: values,
+        fill: false,
+        tension: 0.25
+      }]
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: { x: { display: false } }
     }
+  });
+}
 
-    async function fetchJSON(u,o={}){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return await r.json();}
-    function fmt(v,d=2){return (v===null||v===undefined)?'':Number(v).toFixed(d);}
-    function nowStr(){const n=new Date();return n.toISOString().replace('T',' ').split('.')[0];}
-    function setPill(s){
-      pill.classList.remove('ok','bad','warn');
-      if(s.paused){pill.classList.add('warn');pill.textContent='PAUSED';return;}
-      if(s.running){pill.classList.add('ok');pill.textContent='RUNNING';}
-      else{pill.classList.add('bad');pill.textContent='STOPPED';}
-    }
-
-    function render(data){
-      setPill(data.status);
-      lastUpdateEl.textContent = data.status.last_update ? ('Last update: '+data.status.last_update) : 'No updates yet';
-      refreshTimeEl.textContent = 'Last refresh: '+nowStr();
-
-      tbody.innerHTML='';
-      for(const r of data.trades){
-        const tr=document.createElement('tr');
-        tr.innerHTML=`<td>${r.time}</td><td>${r.connector}</td><td>${r.symbol}</td><td>${r.type}</td><td>${r.side}</td>
-                      <td>${fmt(r.price,6)}</td><td>${fmt(r.qty,6)}</td><td>${fmt(r.pnl,2)}</td><td>${fmt(r.equity,2)}</td>`;
-        tbody.appendChild(tr);
-      }
-
-      if(!eqChart){eqChart=makeLine(document.getElementById('equityChart').getContext('2d'),'Equity','#222');}
-      eqChart.data.labels=data.equity.map(p=>p.time);
-      eqChart.data.datasets[0].data=data.equity.map(p=>p.equity);
-      eqChart.update();
-
-      if(!pnlChart){pnlChart=makeLine(document.getElementById('pnlChart').getContext('2d'),'Daily PnL','#0066cc');}
-      pnlChart.data.labels=data.daily_pnl.map(p=>p.date);
-      pnlChart.data.datasets[0].data=data.daily_pnl.map(p=>p.pnl_pct);
-      pnlChart.update();
-    }
-
-    async function refresh(){try{const d=await fetchJSON('/data');render(d);}catch(e){pill.classList.remove('ok');pill.classList.add('bad');pill.textContent='ERROR';}}
-    document.getElementById('pauseBtn').addEventListener('click',()=>fetchJSON('/pause',{method:'POST'}).then(refresh));
-    document.getElementById('resumeBtn').addEventListener('click',()=>fetchJSON('/resume',{method:'POST'}).then(refresh));
-    refresh(); setInterval(refresh,REFRESH_EVERY_MS);
-  </script>
+loadData();
+setInterval(loadData, 10000);
+</script>
 </body>
 </html>
 """
 
-@app.get("/")
+def _conn():
+    return psycopg2.connect(DATABASE_URL)
+
+@app.route("/")
 def index():
-    return render_template_string(INDEX_HTML)
+    return render_template_string(HTML)
+
+@app.route("/data")
+def data():
+    # read last 200 equity points & last 100 trades
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT time, equity
+                FROM equity_curve
+                ORDER BY time DESC
+                LIMIT 200
+            """)
+            eq_rows = cur.fetchall()
+            eq_rows.reverse()  # chronological for the chart
+
+            cur.execute("""
+                SELECT time, connector, symbol, type, side, price, qty, pnl, equity
+                FROM trades
+                ORDER BY time DESC
+                LIMIT 100
+            """)
+            tr_rows = cur.fetchall()
+
+    # status: running if last equity < 120s ago
+    now = datetime.now(timezone.utc)
+    status = "STOPPED"
+    if eq_rows:
+        last_t = eq_rows[-1]["time"]
+        delta = (now - last_t).total_seconds()
+        status = "RUNNING" if delta < 120 else "STOPPED"
+
+    return jsonify({
+        "now_iso": now.isoformat(),
+        "status": status,
+        "equity": [{"time": r["time"].isoformat(), "equity": float(r["equity"])} for r in eq_rows],
+        "trades": [{
+            "time": r["time"].isoformat(),
+            "connector": r["connector"],
+            "symbol": r["symbol"],
+            "type": r["type"],
+            "side": r["side"],
+            "price": None if r["price"] is None else float(r["price"]),
+            "qty":   None if r["qty"]   is None else float(r["qty"]),
+            "pnl":   None if r["pnl"]   is None else float(r["pnl"]),
+            "equity":None if r["equity"]is None else float(r["equity"]),
+        } for r in tr_rows]
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False)
