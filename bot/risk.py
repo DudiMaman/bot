@@ -1,60 +1,66 @@
-import math
+# bot/risk.py
 
+from dataclasses import dataclass
+
+@dataclass
 class RiskManager:
-    def __init__(self, equity, risk_per_trade=0.01, max_position_pct=0.25):
-        self.equity = float(equity)
-        self.risk_per_trade = float(risk_per_trade)
-        self.max_position_pct = float(max_position_pct)
+    equity: float
+    risk_per_trade: float = 0.005     # 0.5% כברירת מחדל
+    max_position_pct: float = 0.10    # עד 10% הון לפוזיציה
 
-    def position_size(self, entry_price, sl_price):
-        risk_amt = self.equity * self.risk_per_trade
-        risk_per_unit = abs(entry_price - sl_price)
-        if risk_per_unit <= 0: return 0.0
-        qty_by_risk = risk_amt / risk_per_unit
-        max_notional = self.equity * self.max_position_pct
-        qty_by_cap = max_notional / entry_price
-        qty = min(qty_by_risk, qty_by_cap)
-        return math.floor(qty * 1e6) / 1e6
+    def update_equity(self, new_equity: float):
+        self.equity = float(new_equity)
+
+    def position_size(self, entry: float, sl: float) -> float:
+        """חישוב כמות לפי סכום בסיכון לעומת R (entry-sl)."""
+        R = abs(entry - sl)
+        if R <= 0:
+            return 0.0
+        cash_risk = self.equity * self.risk_per_trade
+        qty_by_risk = cash_risk / R
+        qty_by_cap  = (self.equity * self.max_position_pct) / max(entry, 1e-9)
+        return max(0.0, min(qty_by_risk, qty_by_cap))
+
 
 class TradeManager:
     """
-    ניהול פוזיציה: SL=ATR*k, Partial TP (1.5R, 3R), Break-Even אחרי 1R,
-    Trailing שמתהדק אחרי TP1, Time-Stop, (אופציונלי) Pyramiding.
+    מנהל עסקה שמכיר:
+      - atr_k_sl: מרחק SL יחסית ל-ATR
+      - r1_R, r2_R: יעדי רווח ביחס ל-R
+      - p1_pct, p2_pct: חלק יחסי לסגירה ב-TP1/TP2
+      - be_after_R: כמה R צריך לעבור כדי להעביר SL ל-B/E
+      - trail_atr_k: טריילינג לפי ATR
+      - max_bars_in_trade: יציאה בכוח אחרי מספר נרות
+    אם יגיעו פרמטרים לא מוכרים — נתעלם (compat).
     """
+
     def __init__(self,
-                 atr_k_sl=1.8,
-                 r1_R=1.5, p1_pct=0.30,
-                 r2_R=3.0, p2_pct=0.30,
-                 be_after_R=1.0,
-                 trail_k_before=1.8,
-                 trail_k_after=1.2,
-                 max_bars_in_trade=120,
-                 pyramiding=False, add_unit_R=1.25, max_units=3):
-        self.atr_k_sl = atr_k_sl
-        self.r1_R = r1_R; self.p1_pct = p1_pct
-        self.r2_R = r2_R; self.p2_pct = p2_pct
-        self.be_after_R = be_after_R
-        self.trail_k_before = trail_k_before
-        self.trail_k_after  = trail_k_after
-        self.max_bars_in_trade = max_bars_in_trade
-        self.pyramiding = pyramiding
-        self.add_unit_R = add_unit_R
-        self.max_units = max_units
+                 atr_k_sl: float = 1.5,
+                 r1_R: float = 1.0,
+                 r2_R: float = 2.0,
+                 p1_pct: float = 0.5,
+                 p2_pct: float = 0.5,
+                 be_after_R: float = 0.8,
+                 trail_atr_k: float = 1.2,
+                 max_bars_in_trade: int = 48,
+                 **kwargs):
+        # kwargs נבלע כדי לא להישבר אם יש מפתח עודף בקובץ הקונפיג
+        self.atr_k_sl = float(atr_k_sl)
+        self.r1_R = float(r1_R)
+        self.r2_R = float(r2_R)
+        self.p1_pct = float(p1_pct)
+        self.p2_pct = float(p2_pct)
+        self.be_after_R = float(be_after_R)
+        self.trail_atr_k = float(trail_atr_k)
+        self.max_bars_in_trade = int(max_bars_in_trade)
 
-    def initial_levels(self, side, entry, atr):
+    def trail_level(self, side: str, price: float, atr_now: float, after_tp1: bool) -> float:
+        """
+        טריילינג SL לפי ATR. אם עברנו TP1, הטריילינג אגרסיבי יותר מעט (אפשר להשאיר אותו זהה).
+        """
+        k = self.trail_atr_k
+        # אפשר להקשיח אחרי TP1: k *= 0.9 או דומה — נשאיר פשוט
         if side == 'long':
-            sl = entry - self.atr_k_sl * atr
-            R  = entry - sl
-            tp1 = entry + self.r1_R * R
-            tp2 = entry + self.r2_R * R
+            return price - k * atr_now
         else:
-            sl = entry + self.atr_k_sl * atr
-            R  = sl - entry
-            tp1 = entry - self.r1_R * R
-            tp2 = entry - self.r2_R * R
-        return sl, tp1, tp2, R
-
-    def trail_level(self, side, price, atr, after_tp1=False):
-        k = self.trail_k_after if after_tp1 else self.trail_k_before
-        if side == 'long':  return price - k * atr
-        else:               return price + k * atr
+            return price + k * atr_now
