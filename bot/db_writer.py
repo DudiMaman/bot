@@ -1,61 +1,118 @@
 # bot/db_writer.py
 import os
-import psycopg2
-import psycopg2.extras
 from datetime import datetime, timezone
 
+"""
+Fail-safe DB writer:
+- Tries psycopg (v3) first (works with Python 3.13).
+- If not available, tries psycopg2.
+- If neither works, falls back to a No-Op writer so the bot won't crash.
+"""
+
+class _NoOpDB:
+    def __init__(self, *args, **kwargs):
+        err = kwargs.get("err")
+        print(f"[DB] Disabled (CSV-only). Reason: {err}")
+
+    def write_trade(self, *args, **kwargs):
+        pass
+
+    def write_equity(self, *args, **kwargs):
+        pass
+
+    def close(self):
+        pass
+
+
+def _make_psycopg_db(conn_str):
+    import psycopg  # v3
+    class _DB:
+        def __init__(self, dsn):
+            self.conn = psycopg.connect(dsn)
+            self.conn.autocommit = True
+
+        def write_trade(self, t):
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into trades
+                      (time, connector, symbol, type, side, price, qty, pnl, equity)
+                    values
+                      (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        t["time"], t["connector"], t["symbol"], t["type"],
+                        t["side"], t["price"], t["qty"], t["pnl"], t["equity"]
+                    )
+                )
+
+        def write_equity(self, e):
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "insert into equity_curve (time, equity) values (%s, %s)",
+                    (e["time"], e["equity"])
+                )
+
+        def close(self):
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+
+    return _DB(conn_str)
+
+
+def _make_psycopg2_db(conn_str):
+    import psycopg2  # v2
+    class _DB:
+        def __init__(self, dsn):
+            self.conn = psycopg2.connect(dsn)
+            self.conn.autocommit = True
+
+        def write_trade(self, t):
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into trades
+                      (time, connector, symbol, type, side, price, qty, pnl, equity)
+                    values
+                      (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        t["time"], t["connector"], t["symbol"], t["type"],
+                        t["side"], t["price"], t["qty"], t["pnl"], t["equity"]
+                    )
+                )
+
+        def write_equity(self, e):
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "insert into equity_curve (time, equity) values (%s, %s)",
+                    (e["time"], e["equity"])
+                )
+
+        def close(self):
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+
+    return _DB(conn_str)
+
+
 class DB:
-    def __init__(self):
-        self.url = os.environ.get("DATABASE_URL")
-        if not self.url:
-            raise RuntimeError("DATABASE_URL env var is missing")
-        self._ensure_schema()
+    """
+    Factory wrapper: tries psycopg (v3), then psycopg2 (v2), otherwise degrades to NoOp.
+    Usage: DB(os.getenv('DATABASE_URL'))
+    """
+    def __new__(cls, dsn: str | None):
+        if not dsn:
+            return _NoOpDB(err="No DATABASE_URL set")
 
-    def _get_conn(self):
-        return psycopg2.connect(self.url)
-
-    def _ensure_schema(self):
-        ddl_trades = """
-        CREATE TABLE IF NOT EXISTS trades (
-            time        TIMESTAMP NOT NULL,
-            connector   TEXT NOT NULL,
-            symbol      TEXT NOT NULL,
-            type        TEXT NOT NULL,   -- ENTER/TP1/TP2/SL/TIME
-            side        TEXT NOT NULL,   -- long/short
-            price       DOUBLE PRECISION,
-            qty         DOUBLE PRECISION,
-            pnl         DOUBLE PRECISION,
-            equity      DOUBLE PRECISION
-        );
-        """
-        ddl_equity = """
-        CREATE TABLE IF NOT EXISTS equity_curve (
-            time   TIMESTAMP NOT NULL,
-            equity DOUBLE PRECISION NOT NULL
-        );
-        """
-        with self._get_conn() as conn, conn.cursor() as cur:
-            cur.execute(ddl_trades)
-            cur.execute(ddl_equity)
-            conn.commit()
-
-    # rows_trades: list of rows like we already write to CSV
-    # ["time","connector","symbol","type","side","price","qty","pnl","equity"]
-    def write_trades(self, rows_trades):
-        if not rows_trades:
-            return
-        ins = """
-        INSERT INTO trades(time, connector, symbol, type, side, price, qty, pnl, equity)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """
-        with self._get_conn() as conn, conn.cursor() as cur:
-            cur.executemany(ins, rows_trades)
-            conn.commit()
-
-    # equity_point: (iso_time, equity_string)
-    def write_equity(self, equity_point):
-        t, eq = equity_point
-        ins = "INSERT INTO equity_curve(time, equity) VALUES (%s,%s)"
-        with self._get_conn() as conn, conn.cursor() as cur:
-            cur.execute(ins, (t, float(eq)))
-            conn.commit()
+        try:
+            return _make_psycopg_db(dsn)
+        except Exception as e_psycopg:
+            try:
+                return _make_psycopg2_db(dsn)
+            except Exception as e_psycopg2:
+                return _NoOpDB(err=f"psycopg error: {e_psycopg}; psycopg2 error: {e_psycopg2}")
