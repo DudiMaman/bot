@@ -6,13 +6,11 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# --- Paths to bot logs ---
-BASE_DIR = Path(__file__).resolve().parents[1]   # repo root
+BASE_DIR = Path(__file__).resolve().parents[1]
 LOG_DIR = BASE_DIR / "bot" / "logs"
 TRADES_CSV = LOG_DIR / "trades.csv"
 EQUITY_CSV = LOG_DIR / "equity_curve.csv"
 
-# Pause/Resume shared flag
 CONTROLS_DIR = BASE_DIR / "bot" / "controls"
 PAUSE_FLAG = CONTROLS_DIR / "pause.flag"
 CONTROLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -122,7 +120,6 @@ INDEX_HTML = """
     .muted{color:var(--muted); font-size:12px}
     h1{margin:0; font-size:22px;}
     h2{margin:0 0 8px 0; font-size:18px}
-    /* layout: table left (70%), charts right (30%) */
     .main-grid{display:grid; grid-template-columns:70% 30%; gap:16px;}
     .card{border:1px solid var(--card-border); border-radius:12px; padding:14px; height:calc(100vh - 140px); overflow:auto;}
     table{width:100%; border-collapse:collapse; font-size:14px}
@@ -139,12 +136,10 @@ INDEX_HTML = """
 </head>
 <body>
   <header>
-    <!-- line 1: title + auto-refresh (left) -->
     <div class="row">
       <h1>Trading Bot Dashboard</h1>
-      <div class="muted">Auto refresh every <b id="period">10</b> seconds</div>
+      <div class="muted" id="refreshTime">Last refresh: --</div>
     </div>
-    <!-- line 2: status + controls (also left) -->
     <div class="row">
       <span id="status-pill" class="pill warn">Loading…</span>
       <div class="btns">
@@ -156,7 +151,6 @@ INDEX_HTML = """
   </header>
 
   <div class="main-grid">
-    <!-- LEFT: trades table (70%) -->
     <div class="card">
       <h2>Recent Trades</h2>
       <table id="tradesTable">
@@ -170,7 +164,6 @@ INDEX_HTML = """
       </table>
     </div>
 
-    <!-- RIGHT: charts (30%) -->
     <div class="card charts">
       <div class="chart-wrap">
         <h2>Equity Curve</h2>
@@ -186,10 +179,10 @@ INDEX_HTML = """
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     const REFRESH_EVERY_MS = 10000;
-    document.getElementById('period').textContent = REFRESH_EVERY_MS/1000;
     const pill = document.getElementById('status-pill');
     const tbody = document.querySelector('#tradesTable tbody');
     const lastUpdateEl = document.getElementById('lastUpdate');
+    const refreshTimeEl = document.getElementById('refreshTime');
     let eqChart, pnlChart;
 
     function makeLine(ctx,label,color='#111'){
@@ -202,6 +195,7 @@ INDEX_HTML = """
 
     async function fetchJSON(u,o={}){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return await r.json();}
     function fmt(v,d=2){return (v===null||v===undefined)?'':Number(v).toFixed(d);}
+    function nowStr(){const n=new Date();return n.toISOString().replace('T',' ').split('.')[0];}
     function setPill(s){
       pill.classList.remove('ok','bad','warn');
       if(s.paused){pill.classList.add('warn');pill.textContent='PAUSED';return;}
@@ -212,6 +206,7 @@ INDEX_HTML = """
     function render(data){
       setPill(data.status);
       lastUpdateEl.textContent = data.status.last_update ? ('Last update: '+data.status.last_update) : 'No updates yet';
+      refreshTimeEl.textContent = 'Last refresh: '+nowStr();
 
       tbody.innerHTML='';
       for(const r of data.trades){
