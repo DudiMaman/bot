@@ -12,12 +12,11 @@ LOG_DIR = BASE_DIR / "bot" / "logs"
 TRADES_CSV = LOG_DIR / "trades.csv"
 EQUITY_CSV = LOG_DIR / "equity_curve.csv"
 
-# דגל Pause/Resume משותף (הדשבורד יוצר/מוחק; הבוט צריך לבדוק אותו בלולאה)
+# דגל Pause/Resume משותף
 CONTROLS_DIR = BASE_DIR / "bot" / "controls"
 PAUSE_FLAG = CONTROLS_DIR / "pause.flag"
 CONTROLS_DIR.mkdir(parents=True, exist_ok=True)
 
-# כמה דקות נחשב "חי" לעדכון Equity לפני שנאמר שהבוט לא פעיל
 HEARTBEAT_MINUTES = 5
 
 
@@ -30,17 +29,11 @@ def read_trades(limit=200):
         return []
     if df.empty:
         return []
-    # נמסך רק העמודות החשובות, וסידור מהאחרון לראשון
     keep = [c for c in ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"] if c in df.columns]
     df = df[keep].tail(limit).iloc[::-1].reset_index(drop=True)
-    # המרות קלות לייצוג יפה
     for col in ["price", "qty", "pnl", "equity"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "price" in df: df["price"] = df["price"].map(lambda v: None if pd.isna(v) else float(v))
-    if "qty" in df: df["qty"] = df["qty"].map(lambda v: None if pd.isna(v) else float(v))
-    if "pnl" in df: df["pnl"] = df["pnl"].map(lambda v: None if pd.isna(v) else float(v))
-    if "equity" in df: df["equity"] = df["equity"].map(lambda v: None if pd.isna(v) else float(v))
     return df.to_dict(orient="records")
 
 
@@ -53,17 +46,9 @@ def read_equity(limit=500):
         return []
     if df.empty:
         return []
-    keep = [c for c in ["time", "equity"] if c in df.columns]
-    df = df[keep].tail(limit).reset_index(drop=True)
-    # המרות
+    df = df[["time", "equity"]].tail(limit).reset_index(drop=True)
     df["equity"] = pd.to_numeric(df["equity"], errors="coerce")
-    # מחזיר רשימת נקודות
-    points = []
-    for _, r in df.iterrows():
-        t = str(r["time"])
-        e = None if pd.isna(r["equity"]) else float(r["equity"])
-        points.append({"time": t, "equity": e})
-    return points
+    return [{"time": str(r["time"]), "equity": float(r["equity"])} for _, r in df.iterrows()]
 
 
 def is_paused():
@@ -71,22 +56,12 @@ def is_paused():
 
 
 def heartbeat_status():
-    """
-    סטטוס חיות: נחשב 'רץ' אם קובץ equity_curve.csv עודכן ב־HEARTBEAT_MINUTES האחרונות.
-    """
     if not EQUITY_CSV.exists():
         return {"running": False, "last_update": None, "paused": is_paused()}
     mtime = datetime.fromtimestamp(EQUITY_CSV.stat().st_mtime, tz=timezone.utc)
-    now = datetime.now(timezone.utc)
-    delta = (now - mtime).total_seconds() / 60.0
-    return {
-        "running": delta <= HEARTBEAT_MINUTES,
-        "last_update": mtime.isoformat(),
-        "paused": is_paused()
-    }
+    delta = (datetime.now(timezone.utc) - mtime).total_seconds() / 60
+    return {"running": delta <= HEARTBEAT_MINUTES, "last_update": mtime.isoformat(), "paused": is_paused()}
 
-
-# -------------------- ROUTES (API) --------------------
 
 @app.get("/data")
 def data_api():
@@ -99,21 +74,15 @@ def data_api():
 
 @app.post("/pause")
 def pause_api():
-    try:
-        PAUSE_FLAG.write_text("paused\n", encoding="utf-8")
-        return jsonify({"ok": True, "paused": True})
-    except Exception as e:
-        return abort(500, str(e))
+    PAUSE_FLAG.write_text("paused\n", encoding="utf-8")
+    return jsonify({"ok": True, "paused": True})
 
 
 @app.post("/resume")
 def resume_api():
-    try:
-        if PAUSE_FLAG.exists():
-            PAUSE_FLAG.unlink()
-        return jsonify({"ok": True, "paused": False})
-    except Exception as e:
-        return abort(500, str(e))
+    if PAUSE_FLAG.exists():
+        PAUSE_FLAG.unlink()
+    return jsonify({"ok": True, "paused": False})
 
 
 # -------------------- UI --------------------
@@ -126,57 +95,48 @@ INDEX_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trading Bot Dashboard</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif; max-width:1100px; margin:24px auto; padding:0 12px;}
-    header{display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:14px}
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif; max-width:1300px; margin:24px auto; padding:0 12px;}
+    header{display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:16px}
     .pill{display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:20px; font-weight:600;}
     .ok{background:#eaf7ee; color:#137333;}
     .bad{background:#fdecec; color:#b00020;}
     .warn{background:#fff6e6; color:#8a6d00;}
-    .row{display:grid; grid-template-columns:1.2fr 1fr; gap:16px; align-items:start;}
-    .card{border:1px solid #eee; border-radius:12px; padding:14px}
-    h2{margin:0 0 8px 0; font-size:18px}
-    table{width:100%; border-collapse:collapse; font-size:14px}
-    th,td{padding:8px 6px; border-bottom:1px solid #eee; text-align:right}
-    th{background:#fafafa; position:sticky; top:0}
     .btns{display:flex; gap:8px}
     button{padding:8px 12px; border:1px solid #ddd; background:#fff; border-radius:10px; cursor:pointer}
     button.primary{background:#111; color:#fff; border-color:#111}
     .muted{color:#666; font-size:12px}
-    .stack{display:flex; flex-direction:column; gap:6px}
-    @media(max-width:900px){ .row{grid-template-columns:1fr} }
-    canvas{width:100%; height:280px}
+    h1{margin:0; font-size:22px;}
+    h2{margin:0 0 8px 0; font-size:18px}
+    .main-grid{display:grid; grid-template-columns:70% 30%; gap:16px;}
+    .card{border:1px solid #eee; border-radius:12px; padding:14px; height:calc(100vh - 120px); overflow:auto;}
+    table{width:100%; border-collapse:collapse; font-size:14px}
+    th,td{padding:8px 6px; border-bottom:1px solid #eee; text-align:right}
+    th{background:#fafafa; position:sticky; top:0}
+    canvas{width:100%; height:100%}
+    @media(max-width:900px){
+      .main-grid{grid-template-columns:1fr;}
+      .card{height:auto;}
+    }
   </style>
 </head>
 <body>
   <header>
-    <div class="stack">
-      <div style="display:flex; gap:10px; align-items:center;">
-        <h1 style="margin:0; font-size:22px;">Trading Bot Dashboard</h1>
-        <span id="status-pill" class="pill warn">טוען…</span>
-      </div>
-      <div class="muted">התעדכנות אוטומטית כל <b id="period">10</b> שניות</div>
+    <div>
+      <h1>Trading Bot Dashboard</h1>
+      <div class="muted">רענון אוטומטי כל <b id="period">10</b> שניות</div>
     </div>
-    <div class="btns">
-      <button id="pauseBtn" class="secondary">Pause</button>
-      <button id="resumeBtn" class="primary">Resume</button>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <span id="status-pill" class="pill warn">טוען…</span>
+      <div class="btns">
+        <button id="pauseBtn">Pause</button>
+        <button id="resumeBtn" class="primary">Resume</button>
+      </div>
     </div>
   </header>
 
-  <div class="row">
+  <div class="main-grid">
     <div class="card">
-      <h2>Equity Curve</h2>
-      <canvas id="equityChart"></canvas>
-      <div class="muted" id="lastUpdate"></div>
-    </div>
-    <div class="card">
-      <h2>סיכום</h2>
-      <div id="summaryBox" class="stack"></div>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:16px;">
-    <h2>עסקאות אחרונות</h2>
-    <div style="max-height:420px; overflow:auto;">
+      <h2>עסקאות אחרונות</h2>
       <table id="tradesTable">
         <thead>
           <tr>
@@ -187,123 +147,59 @@ INDEX_HTML = """
         <tbody></tbody>
       </table>
     </div>
+
+    <div class="card">
+      <h2>Equity Curve</h2>
+      <canvas id="equityChart"></canvas>
+      <div class="muted" id="lastUpdate" style="margin-top:10px;"></div>
+    </div>
   </div>
 
-  <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-    const REFRESH_EVERY_MS = 10000; // 10 שניות
-    const periodEl = document.getElementById('period');
-    periodEl.textContent = Math.round(REFRESH_EVERY_MS/1000);
-
+    const REFRESH_EVERY_MS = 10000;
+    document.getElementById('period').textContent = REFRESH_EVERY_MS/1000;
     const pill = document.getElementById('status-pill');
-    const lastUpdateEl = document.getElementById('lastUpdate');
-    const summaryBox = document.getElementById('summaryBox');
     const tbody = document.querySelector('#tradesTable tbody');
-
+    const lastUpdateEl = document.getElementById('lastUpdate');
     let eqChart;
-    function ensureChart() {
+
+    function ensureChart(){
       if (eqChart) return eqChart;
       const ctx = document.getElementById('equityChart').getContext('2d');
       eqChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels: [], datasets: [{ label: 'Equity', data: [], tension: 0.2 }]},
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: { y: { beginAtZero: false } },
-          plugins: { legend: { display: false } }
-        }
+        type:'line',
+        data:{labels:[], datasets:[{label:'Equity', data:[], borderColor:'#222', tension:0.2}]},
+        options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}}
       });
       return eqChart;
     }
 
-    async function fetchJSON(url, opts={}) {
-      const r = await fetch(url, opts);
-      if (!r.ok) throw new Error(await r.text());
-      return await r.json();
-    }
-
-    function setPill(status){
-      pill.classList.remove('ok','bad','warn');
-      if (status.paused) {
-        pill.classList.add('warn'); pill.textContent = 'PAUSED';
-        return;
-      }
-      if (status.running) {
-        pill.classList.add('ok'); pill.textContent = 'RUNNING';
-      } else {
-        pill.classList.add('bad'); pill.textContent = 'STOPPED';
-      }
-    }
-
-    function fmt(n, digits=2){ return (n===null || n===undefined) ? '' : Number(n).toFixed(digits); }
+    async function fetchJSON(u,o={}){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return await r.json();}
+    function fmt(v,d=2){return (v===null||v===undefined)?'':Number(v).toFixed(d);}
+    function setPill(s){pill.classList.remove('ok','bad','warn');if(s.paused){pill.classList.add('warn');pill.textContent='PAUSED';return;}
+      if(s.running){pill.classList.add('ok');pill.textContent='RUNNING';}else{pill.classList.add('bad');pill.textContent='STOPPED';}}
 
     function render(data){
       setPill(data.status);
-      lastUpdateEl.textContent = data.status.last_update ? ('עודכן לאחרונה: ' + data.status.last_update) : 'אין עדכון';
-
-      // סיכום קטן
-      let lastEq = (data.equity.length ? data.equity[data.equity.length-1].equity : null);
-      let firstEq = (data.equity.length ? data.equity[0].equity : null);
-      let pnlAbs = (lastEq!==null && firstEq!==null) ? (lastEq - firstEq) : null;
-      let pnlPct = (pnlAbs!==null && firstEq ? (pnlAbs/firstEq*100) : null);
-
-      summaryBox.innerHTML = `
-        <div>Equity נוכחי: <b>${fmt(lastEq,2)}</b></div>
-        <div>PnL מצטבר: <b>${fmt(pnlAbs,2)}</b> (${fmt(pnlPct,2)}%)</div>
-        <div>טריידים מוצגים: <b>${data.trades.length}</b></div>
-      `;
-
-      // טבלת טריידים
-      tbody.innerHTML = '';
-      for (const r of data.trades){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${r.time ?? ''}</td>
-          <td>${r.connector ?? ''}</td>
-          <td>${r.symbol ?? ''}</td>
-          <td>${r.type ?? ''}</td>
-          <td>${r.side ?? ''}</td>
-          <td>${fmt(r.price, 6)}</td>
-          <td>${fmt(r.qty, 6)}</td>
-          <td>${fmt(r.pnl, 2)}</td>
-          <td>${fmt(r.equity, 2)}</td>
-        `;
+      lastUpdateEl.textContent = data.status.last_update ? ('עודכן לאחרונה: '+data.status.last_update) : 'אין עדכון';
+      tbody.innerHTML='';
+      for(const r of data.trades){
+        const tr=document.createElement('tr');
+        tr.innerHTML=`<td>${r.time}</td><td>${r.connector}</td><td>${r.symbol}</td><td>${r.type}</td><td>${r.side}</td>
+                      <td>${fmt(r.price,6)}</td><td>${fmt(r.qty,6)}</td><td>${fmt(r.pnl,2)}</td><td>${fmt(r.equity,2)}</td>`;
         tbody.appendChild(tr);
       }
-
-      // גרף Equity
-      const c = ensureChart();
-      c.data.labels = data.equity.map(p => p.time);
-      c.data.datasets[0].data = data.equity.map(p => p.equity);
+      const c=ensureChart();
+      c.data.labels=data.equity.map(p=>p.time);
+      c.data.datasets[0].data=data.equity.map(p=>p.equity);
       c.update();
     }
 
-    async function refresh(){
-      try{
-        const data = await fetchJSON('/data');
-        render(data);
-      } catch(e){
-        pill.classList.remove('ok'); pill.classList.add('bad');
-        pill.textContent = 'ERROR';
-        console.error(e);
-      }
-    }
-
-    // כפתורי Pause/Resume
-    document.getElementById('pauseBtn').addEventListener('click', async ()=>{
-      try { await fetchJSON('/pause', {method:'POST'}); await refresh(); }
-      catch(e){ alert('Pause failed: '+e.message); }
-    });
-    document.getElementById('resumeBtn').addEventListener('click', async ()=>{
-      try { await fetchJSON('/resume', {method:'POST'}); await refresh(); }
-      catch(e){ alert('Resume failed: '+e.message); }
-    });
-
-    // טעינה ראשונה ורענון אוטומטי
-    refresh();
-    setInterval(refresh, REFRESH_EVERY_MS);
+    async function refresh(){try{const d=await fetchJSON('/data');render(d);}catch(e){pill.classList.remove('ok');pill.classList.add('bad');pill.textContent='ERROR';}}
+    document.getElementById('pauseBtn').addEventListener('click',()=>fetchJSON('/pause',{method:'POST'}).then(refresh));
+    document.getElementById('resumeBtn').addEventListener('click',()=>fetchJSON('/resume',{method:'POST'}).then(refresh));
+    refresh(); setInterval(refresh,REFRESH_EVERY_MS);
   </script>
 </body>
 </html>
@@ -313,9 +209,6 @@ INDEX_HTML = """
 def index():
     return render_template_string(INDEX_HTML)
 
-
-# -------------------- Render / Gunicorn --------------------
 if __name__ == "__main__":
-    # להרצה מקומית: python app.py
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
