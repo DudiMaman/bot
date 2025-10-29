@@ -83,6 +83,11 @@ def main():
     load_dotenv()
     with open(os.path.join(THIS_DIR, "config.yml"), "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
+        from bot.db_writer import DB  # אם כבר קיים למעלה – אל תוסיף שוב
+
+# אחרי טעינת הקונפיג/ENV:
+db = DB(os.getenv("DATABASE_URL"))
+
 
     # 2) בנה אסטרטגיה ו-TradeManager עם סינון מפתחות חוקיים בלבד
     import inspect
