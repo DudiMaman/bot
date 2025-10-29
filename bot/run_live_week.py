@@ -7,6 +7,7 @@
 # - לוגים מסודרים ל-logs/trades.csv ו-logs/equity_curve.csv
 # ------------------------------------------------------------
 
+from bot.db_writer import DB
 import os
 import sys
 import math
@@ -348,8 +349,8 @@ def main():
 
         # כתיבת לוגים
         if rows_trades:
-            write_csv(TRADES_CSV, ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"], rows_trades)
-        write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
+            db.write_trades(rows_trades)
+        db.write_equity((now_utc.isoformat(), f"{equity:.2f}"))
 
         # סיום שבוע
         if time.time() - start_time >= SECONDS_IN_WEEK:
