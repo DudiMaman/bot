@@ -355,7 +355,11 @@ db = DB(os.getenv("DATABASE_URL"))
         # כתיבת לוגים
         if rows_trades:
             db.write_trades(rows_trades)
-        db.write_equity((now_utc.isoformat(), f"{equity:.2f}"))
+        db.write_equity({
+    "time": now_utc.isoformat(),
+    "equity": float(f"{equity:.2f}")
+})
+
 
         # סיום שבוע
         if time.time() - start_time >= SECONDS_IN_WEEK:
