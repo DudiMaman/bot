@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en" data-bs-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot Dashboard</title>
+    <!-- Tabler CSS (CDN) -->
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css" rel="stylesheet"/>
+    <style>
+      body { background-color: var(--tblr-bg-surface); }
+      .chip {
+        padding: .25rem .6rem; border-radius: 999px; font-weight: 600; font-size: .85rem;
+      }
+      .chip-running { background: #d1fae5; color: #065f46; }
+      .chip-stopped { background: #fee2e2; color: #7f1d1d; }
+      .grid-70-30 { display: grid; grid-template-columns: 70% 30%; gap: 1rem; }
+      .table thead th { position: sticky; top: 0; background: var(--tblr-bg-surface); z-index: 1; }
+      .scroll-card { max-height: 70vh; overflow: auto; }
+      .muted { color: var(--tblr-muted); }
+      .toolbar{ display:flex; gap:.5rem; flex-wrap:wrap; align-items:center}
+      .toolbar .spacer{ flex:1 }
+      .small { font-size: .875rem; }
+      .last-updated { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+      @media (max-width: 992px) { .grid-70-30 { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="navbar navbar-expand-md navbar-light sticky-top" style="background:var(--tblr-bg-surface); border-bottom:1px solid var(--tblr-border-color);">
+        <div class="container-xl">
+          <h1 class="navbar-brand">
+            <span class="navbar-brand-text">Trading Bot — Control & Monitor</span>
+          </h1>
+          <div class="toolbar">
+            <div class="chip" id="statusChip">—</div>
+            <span class="muted small last-updated" id="lastUpdated">Last updated: —</span>
+            <span class="spacer"></span>
+            <button id="btnResume" class="btn btn-success btn-sm">Start</button>
+            <button id="btnPause" class="btn btn-outline-danger btn-sm">Stop</button>
+            <button id="btnTheme" class="btn btn-outline-secondary btn-sm" title="Toggle theme">Theme</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="page-body">
+        <div class="container-xl my-3">
+          <div class="grid-70-30">
+            <!-- LEFT: Trades Table (70%) -->
+            <div>
+              <div class="card scroll-card">
+                <div class="card-header">
+                  <h3 class="card-title">Recent Trades</h3>
+                </div>
+                <div class="table-responsive">
+                  <table class="table table-hover">
+                    <thead>
+                      <tr>
+                        <th style="min-width:160px;">Time (UTC)</th>
+                        <th>Conn.</th>
+                        <th>Symbol</th>
+                        <th>Type</th>
+                        <th>Side</th>
+                        <th class="text-end">Price</th>
+                        <th class="text-end">Qty</th>
+                        <th class="text-end">PnL</th>
+                        <th class="text-end">Equity</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tradesBody">
+                      <!-- filled by JS -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- RIGHT: Equity Chart (30%) -->
+            <div>
+              <div class="card" style="height:70vh;">
+                <div class="card-header">
+                  <h3 class="card-title">Equity Curve</h3>
+                </div>
+                <div class="card-body">
+                  <canvas id="equityChart" style="height: 60vh; width: 100%;"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
