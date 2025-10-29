@@ -1,18 +1,18 @@
 import os
 from pathlib import Path
 from datetime import datetime, timezone
-from flask import Flask, jsonify, request, render_template_string, abort
+from flask import Flask, jsonify, render_template_string
 import pandas as pd
 
 app = Flask(__name__)
 
-# --- נתיבים לקבצי הלוג של הבוט ---
-BASE_DIR = Path(__file__).resolve().parents[1]   # שורש הריפו
+# --- Paths to bot logs ---
+BASE_DIR = Path(__file__).resolve().parents[1]   # repo root
 LOG_DIR = BASE_DIR / "bot" / "logs"
 TRADES_CSV = LOG_DIR / "trades.csv"
 EQUITY_CSV = LOG_DIR / "equity_curve.csv"
 
-# דגל Pause/Resume משותף
+# Pause/Resume shared flag
 CONTROLS_DIR = BASE_DIR / "bot" / "controls"
 PAUSE_FLAG = CONTROLS_DIR / "pause.flag"
 CONTROLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,6 @@ def read_equity(limit=500):
 
 
 def calc_daily_pnl(equity_points):
-    """מקבל נקודות Equity ומחזיר שינוי יומי באחוזים"""
     if not equity_points:
         return []
     df = pd.DataFrame(equity_points)
@@ -82,7 +81,7 @@ def data_api():
         "status": heartbeat_status(),
         "trades": read_trades(limit=200),
         "equity": equity,
-        "daily_pnl": calc_daily_pnl(equity)
+        "daily_pnl": calc_daily_pnl(equity),
     })
 
 
@@ -103,14 +102,16 @@ def resume_api():
 
 INDEX_HTML = """
 <!doctype html>
-<html lang="he" dir="rtl">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trading Bot Dashboard</title>
   <style>
+    :root{--card-border:#eee; --muted:#666;}
     body{font-family:system-ui,Segoe UI,Arial,sans-serif; max-width:1300px; margin:24px auto; padding:0 12px;}
-    header{display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:16px}
+    header{display:flex; flex-direction:column; gap:8px; margin-bottom:16px}
+    .row{display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
     .pill{display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:20px; font-weight:600;}
     .ok{background:#eaf7ee; color:#137333;}
     .bad{background:#fdecec; color:#b00020;}
@@ -118,13 +119,14 @@ INDEX_HTML = """
     .btns{display:flex; gap:8px}
     button{padding:8px 12px; border:1px solid #ddd; background:#fff; border-radius:10px; cursor:pointer}
     button.primary{background:#111; color:#fff; border-color:#111}
-    .muted{color:#666; font-size:12px}
+    .muted{color:var(--muted); font-size:12px}
     h1{margin:0; font-size:22px;}
     h2{margin:0 0 8px 0; font-size:18px}
+    /* layout: table left (70%), charts right (30%) */
     .main-grid{display:grid; grid-template-columns:70% 30%; gap:16px;}
-    .card{border:1px solid #eee; border-radius:12px; padding:14px; height:calc(100vh - 120px); overflow:auto;}
+    .card{border:1px solid var(--card-border); border-radius:12px; padding:14px; height:calc(100vh - 140px); overflow:auto;}
     table{width:100%; border-collapse:collapse; font-size:14px}
-    th,td{padding:8px 6px; border-bottom:1px solid #eee; text-align:right}
+    th,td{padding:8px 6px; border-bottom:1px solid #eee; text-align:left}
     th{background:#fafafa; position:sticky; top:0}
     .charts{display:flex; flex-direction:column; gap:24px; height:100%;}
     .chart-wrap{flex:1; display:flex; flex-direction:column;}
@@ -137,33 +139,38 @@ INDEX_HTML = """
 </head>
 <body>
   <header>
-    <div>
+    <!-- line 1: title + auto-refresh (left) -->
+    <div class="row">
       <h1>Trading Bot Dashboard</h1>
-      <div class="muted">רענון אוטומטי כל <b id="period">10</b> שניות</div>
+      <div class="muted">Auto refresh every <b id="period">10</b> seconds</div>
     </div>
-    <div style="display:flex; align-items:center; gap:10px;">
-      <span id="status-pill" class="pill warn">טוען…</span>
+    <!-- line 2: status + controls (also left) -->
+    <div class="row">
+      <span id="status-pill" class="pill warn">Loading…</span>
       <div class="btns">
-        <button id="pauseBtn">Pause</button>
         <button id="resumeBtn" class="primary">Resume</button>
+        <button id="pauseBtn">Pause</button>
       </div>
+      <div class="muted" id="lastUpdate"></div>
     </div>
   </header>
 
   <div class="main-grid">
+    <!-- LEFT: trades table (70%) -->
     <div class="card">
-      <h2>עסקאות אחרונות</h2>
+      <h2>Recent Trades</h2>
       <table id="tradesTable">
         <thead>
           <tr>
-            <th>זמן</th><th>מחבר</th><th>סימבול</th><th>סוג</th><th>כיוון</th>
-            <th>מחיר</th><th>כמות</th><th>PnL</th><th>Equity</th>
+            <th>Time</th><th>Connector</th><th>Symbol</th><th>Type</th><th>Side</th>
+            <th>Price</th><th>Qty</th><th>PnL</th><th>Equity</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
 
+    <!-- RIGHT: charts (30%) -->
     <div class="card charts">
       <div class="chart-wrap">
         <h2>Equity Curve</h2>
@@ -173,7 +180,6 @@ INDEX_HTML = """
         <h2>Daily PnL (%)</h2>
         <canvas id="pnlChart"></canvas>
       </div>
-      <div class="muted" id="lastUpdate" style="margin-top:10px;"></div>
     </div>
   </div>
 
@@ -196,12 +202,16 @@ INDEX_HTML = """
 
     async function fetchJSON(u,o={}){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return await r.json();}
     function fmt(v,d=2){return (v===null||v===undefined)?'':Number(v).toFixed(d);}
-    function setPill(s){pill.classList.remove('ok','bad','warn');if(s.paused){pill.classList.add('warn');pill.textContent='PAUSED';return;}
-      if(s.running){pill.classList.add('ok');pill.textContent='RUNNING';}else{pill.classList.add('bad');pill.textContent='STOPPED';}}
+    function setPill(s){
+      pill.classList.remove('ok','bad','warn');
+      if(s.paused){pill.classList.add('warn');pill.textContent='PAUSED';return;}
+      if(s.running){pill.classList.add('ok');pill.textContent='RUNNING';}
+      else{pill.classList.add('bad');pill.textContent='STOPPED';}
+    }
 
     function render(data){
       setPill(data.status);
-      lastUpdateEl.textContent = data.status.last_update ? ('עודכן לאחרונה: '+data.status.last_update) : 'אין עדכון';
+      lastUpdateEl.textContent = data.status.last_update ? ('Last update: '+data.status.last_update) : 'No updates yet';
 
       tbody.innerHTML='';
       for(const r of data.trades){
@@ -211,13 +221,11 @@ INDEX_HTML = """
         tbody.appendChild(tr);
       }
 
-      // גרף Equity
       if(!eqChart){eqChart=makeLine(document.getElementById('equityChart').getContext('2d'),'Equity','#222');}
       eqChart.data.labels=data.equity.map(p=>p.time);
       eqChart.data.datasets[0].data=data.equity.map(p=>p.equity);
       eqChart.update();
 
-      // גרף Daily PnL
       if(!pnlChart){pnlChart=makeLine(document.getElementById('pnlChart').getContext('2d'),'Daily PnL','#0066cc');}
       pnlChart.data.labels=data.daily_pnl.map(p=>p.date);
       pnlChart.data.datasets[0].data=data.daily_pnl.map(p=>p.pnl_pct);
