@@ -10,7 +10,7 @@ live_connectors:
       - "SOL/USDT"
       - "XRP/USDT"
       - "ADA/USDT"
-    timeframe: "5m"     # קצר יותר כדי לראות יותר אירועים
+    timeframe: "1m"     # קצר יותר כדי לראות יותר אירועים
     htf_timeframe: "30m" # HTF קצר יחסית
 
 strategy:
