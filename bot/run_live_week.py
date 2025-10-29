@@ -79,10 +79,36 @@ def prepare_features(ltf_df: pd.DataFrame, htf_df: pd.DataFrame, strat: Donchian
 # Main
 # ------------------------------------------------------------
 def main():
-    # 1) טען ENV וקובץ קונפיג
+    # 1) טען משתני סביבה וקובץ קונפיג
     load_dotenv()
-    with open(os.path.join(THIS_DIR, "config.yml"), "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
+    with open('bot/config.yml', 'r', encoding='utf-8') as f:
+        cfg = yaml.safe_load(f)
+
+    # 2) אתחול מסד נתונים
+    from bot.db_writer import DB
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    db = DB(DATABASE_URL)
+
+    # 3) אתחול אסטרטגיה ומנהלי סיכון
+    strat_cfg = cfg['strategy']
+    trade_cfg = cfg['trade_manager']
+    portfolio_cfg = cfg['portfolio']
+
+    strat = DonchianTrendADXRSI(**{k: v for k, v in strat_cfg.items() if k in DonchianTrendADXRSI.__init__.__code__.co_varnames})
+    tm = TradeManager(**{k: v for k, v in trade_cfg.items() if k in TradeManager.__init__.__code__.co_varnames})
+
+    equity = float(portfolio_cfg['equity0'])
+    rm = RiskManager(equity, portfolio_cfg['risk_per_trade'], portfolio_cfg['max_position_pct'])
+
+    # 4) כתיבת equity ראשונית למסד
+    now_utc = datetime.now(timezone.utc)
+    try:
+        db.write_equity({
+            "time": now_utc.isoformat(),
+            "equity": float(f"{equity:.2f}")
+        })
+    except Exception as e:
+        print(f"[WARN] DB write_equity init failed: {e}")
         from bot.db_writer import DB  # אם כבר קיים למעלה – אל תוסיף שוב
 
 # אחרי טעינת הקונפיג/ENV:
