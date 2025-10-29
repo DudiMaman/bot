@@ -51,6 +51,18 @@ def read_equity(limit=500):
     return [{"time": str(r["time"]), "equity": float(r["equity"])} for _, r in df.iterrows()]
 
 
+def calc_daily_pnl(equity_points):
+    """מקבל נקודות Equity ומחזיר שינוי יומי באחוזים"""
+    if not equity_points:
+        return []
+    df = pd.DataFrame(equity_points)
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    df = df.dropna(subset=["time", "equity"])
+    df["date"] = df["time"].dt.date
+    daily = df.groupby("date")["equity"].last().pct_change().fillna(0) * 100
+    return [{"date": str(d), "pnl_pct": round(v, 2)} for d, v in daily.items()]
+
+
 def is_paused():
     return PAUSE_FLAG.exists()
 
@@ -65,10 +77,12 @@ def heartbeat_status():
 
 @app.get("/data")
 def data_api():
+    equity = read_equity(limit=500)
     return jsonify({
         "status": heartbeat_status(),
         "trades": read_trades(limit=200),
-        "equity": read_equity(limit=500),
+        "equity": equity,
+        "daily_pnl": calc_daily_pnl(equity)
     })
 
 
@@ -112,7 +126,9 @@ INDEX_HTML = """
     table{width:100%; border-collapse:collapse; font-size:14px}
     th,td{padding:8px 6px; border-bottom:1px solid #eee; text-align:right}
     th{background:#fafafa; position:sticky; top:0}
-    canvas{width:100%; height:100%}
+    .charts{display:flex; flex-direction:column; gap:24px; height:100%;}
+    .chart-wrap{flex:1; display:flex; flex-direction:column;}
+    canvas{width:100%; flex:1;}
     @media(max-width:900px){
       .main-grid{grid-template-columns:1fr;}
       .card{height:auto;}
@@ -148,9 +164,15 @@ INDEX_HTML = """
       </table>
     </div>
 
-    <div class="card">
-      <h2>Equity Curve</h2>
-      <canvas id="equityChart"></canvas>
+    <div class="card charts">
+      <div class="chart-wrap">
+        <h2>Equity Curve</h2>
+        <canvas id="equityChart"></canvas>
+      </div>
+      <div class="chart-wrap">
+        <h2>Daily PnL (%)</h2>
+        <canvas id="pnlChart"></canvas>
+      </div>
       <div class="muted" id="lastUpdate" style="margin-top:10px;"></div>
     </div>
   </div>
@@ -162,17 +184,14 @@ INDEX_HTML = """
     const pill = document.getElementById('status-pill');
     const tbody = document.querySelector('#tradesTable tbody');
     const lastUpdateEl = document.getElementById('lastUpdate');
-    let eqChart;
+    let eqChart, pnlChart;
 
-    function ensureChart(){
-      if (eqChart) return eqChart;
-      const ctx = document.getElementById('equityChart').getContext('2d');
-      eqChart = new Chart(ctx, {
+    function makeLine(ctx,label,color='#111'){
+      return new Chart(ctx,{
         type:'line',
-        data:{labels:[], datasets:[{label:'Equity', data:[], borderColor:'#222', tension:0.2}]},
-        options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}}
+        data:{labels:[],datasets:[{label:label,data:[],borderColor:color,tension:0.2}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}
       });
-      return eqChart;
     }
 
     async function fetchJSON(u,o={}){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return await r.json();}
@@ -183,6 +202,7 @@ INDEX_HTML = """
     function render(data){
       setPill(data.status);
       lastUpdateEl.textContent = data.status.last_update ? ('עודכן לאחרונה: '+data.status.last_update) : 'אין עדכון';
+
       tbody.innerHTML='';
       for(const r of data.trades){
         const tr=document.createElement('tr');
@@ -190,10 +210,18 @@ INDEX_HTML = """
                       <td>${fmt(r.price,6)}</td><td>${fmt(r.qty,6)}</td><td>${fmt(r.pnl,2)}</td><td>${fmt(r.equity,2)}</td>`;
         tbody.appendChild(tr);
       }
-      const c=ensureChart();
-      c.data.labels=data.equity.map(p=>p.time);
-      c.data.datasets[0].data=data.equity.map(p=>p.equity);
-      c.update();
+
+      // גרף Equity
+      if(!eqChart){eqChart=makeLine(document.getElementById('equityChart').getContext('2d'),'Equity','#222');}
+      eqChart.data.labels=data.equity.map(p=>p.time);
+      eqChart.data.datasets[0].data=data.equity.map(p=>p.equity);
+      eqChart.update();
+
+      // גרף Daily PnL
+      if(!pnlChart){pnlChart=makeLine(document.getElementById('pnlChart').getContext('2d'),'Daily PnL','#0066cc');}
+      pnlChart.data.labels=data.daily_pnl.map(p=>p.date);
+      pnlChart.data.datasets[0].data=data.daily_pnl.map(p=>p.pnl_pct);
+      pnlChart.update();
     }
 
     async function refresh(){try{const d=await fetchJSON('/data');render(d);}catch(e){pill.classList.remove('ok');pill.classList.add('bad');pill.textContent='ERROR';}}
