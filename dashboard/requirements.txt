@@ -1,3 +1,12 @@
 Flask==3.0.3
 gunicorn==22.0.0
-pandas==2.2.2
+
+# כדי למנוע בנייה מקוד מקור על Python 3.13
+numpy==2.3.2
+pandas==2.2.3
+
+# אם הדשבורד ניגש ל-Postgres (מומלץ כי עברנו ל-DB):
+psycopg[binary]==3.2.3
+
+python-dateutil==2.9.0.post0
+pytz==2025.2
