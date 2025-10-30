@@ -4,24 +4,24 @@ live_connectors:
     exchange_id: bybit
     paper: true
     default_type: spot
-    symbols: ["AUTO"]   # ניגש לשוק ויבחר אוטומטית עד ~25 זוגות USDT זמינים
+    symbols: ["AUTO", "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT"]  # AUTO + כמה גיבויים
     timeframe: "1m"
-    htf_timeframe: "15m"
+    htf_timeframe: "5m"
 
 strategy:
-  donchian_len: 6      # קצר כדי להגדיל סיכוי לסיגנלים
-  adx_min: 0           # מבטל סף ADX בסשן בדיקה
+  donchian_len: 4    # קצר כדי לייצר יותר פריצות
+  adx_min: 0         # מבטל סינון ADX לבדיקות
 
 trade_manager:
-  atr_k_sl: 0.7        # R קטן -> כמות גדולה יותר
+  atr_k_sl: 0.6
   r1_R: 0.4
   r2_R: 0.8
   p1_pct: 0.5
   p2_pct: 0.5
   be_after_R: 0.4
-  max_bars_in_trade: 40
+  max_bars_in_trade: 50
 
 portfolio:
   equity0: 100000
-  risk_per_trade: 0.03    # 3% זמני לבדיקות (אפשר להחזיר אח"כ)
-  max_position_pct: 0.70  # מאפשר להיכנס בכמות מספיקה גם כשמחיר גבוה
+  risk_per_trade: 0.03
+  max_position_pct: 0.70
