@@ -74,7 +74,6 @@ def prepare_features(ltf_df: pd.DataFrame, htf_df: pd.DataFrame, strat: Donchian
     f["atr"] = calc_atr(ltf_df, 14)
     return f
 
-
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
