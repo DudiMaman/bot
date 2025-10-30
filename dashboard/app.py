@@ -1,38 +1,55 @@
 # dashboard/app.py
 import os
 from flask import Flask, jsonify, request, render_template_string
-import pandas as pd
 from datetime import datetime, timezone
 
-# ==== DB (state only) ====
 USE_DB = bool(os.getenv("DATABASE_URL"))
+db_ok = False
+def db_exec(sql, params=None, fetch=False):
+    # ייקרא רק אם USE_DB True
+    import psycopg
+    with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params or ())
+            if fetch:
+                return cur.fetchall()
+            return None
+
+def ensure_schema_dashboard():
+    """יוצר טבלאות מינימליות אם חסרות (זהה לסכימה שבבוט)"""
+    db_exec("""
+        create table if not exists trades(
+          time timestamptz not null,
+          connector text,
+          symbol text,
+          type text,
+          side text,
+          price double precision,
+          qty double precision,
+          pnl double precision,
+          equity double precision
+        );""")
+    db_exec("""
+        create table if not exists equity_curve(
+          time timestamptz primary key,
+          equity double precision
+        );""")
+    db_exec("""
+        create table if not exists bot_state(
+          id int primary key default 1,
+          state text not null default 'RUNNING',
+          updated_at timestamptz not null default now()
+        );""")
+    db_exec("insert into bot_state (id) values (1) on conflict (id) do nothing;")
+
+# ננסה להתחבר ולוודא סכימה פעם אחת בעת עליית השירות
 if USE_DB:
     try:
-        import psycopg
-        def db_exec(sql, params=None, fetch=False):
-            with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql, params or ())
-                    return cur.fetchall() if fetch else None
-        def get_state():
-            db_exec("""create table if not exists bot_state(
-                        id int primary key default 1,
-                        state text not null default 'RUNNING',
-                        updated_at timestamptz not null default now());""")
-            db_exec("insert into bot_state (id) values (1) on conflict (id) do nothing;")
-            row = db_exec("select state from bot_state where id=1;", fetch=True)
-            return (row[0][0] if row else "RUNNING") or "RUNNING"
-        def set_state(state):
-            db_exec("insert into bot_state (id, state, updated_at) values (1, %s, now()) "
-                    "on conflict (id) do update set state=excluded.state, updated_at=now();", (state,))
-    except Exception:
-        USE_DB = False
-
-# ==== Files (CSV) ====
-BASE = os.path.dirname(__file__)
-LOGS = os.path.join(os.path.dirname(BASE), "bot", "logs")
-TRADES_CSV = os.path.join(LOGS, "trades.csv")
-EQUITY_CSV = os.path.join(LOGS, "equity_curve.csv")
+        ensure_schema_dashboard()
+        db_ok = True
+    except Exception as e:
+        print(f"[Dashboard] DB unavailable: {e}")
+        db_ok = False
 
 app = Flask(__name__)
 
@@ -109,7 +126,6 @@ HTML = """
     fetch('/data').then(r=>r.json()).then(d=>{
       document.getElementById('last-refresh').textContent = d.now;
       setStatus(d.state);
-
       const tbody = document.querySelector('#trades tbody');
       tbody.innerHTML = '';
       d.trades.forEach(row=>{
@@ -117,9 +133,9 @@ HTML = """
         row.forEach(cell=>{
           const td = document.createElement('td');
           td.textContent = cell;
-          tbody.appendChild(tr);
           tr.appendChild(td);
         });
+        tbody.appendChild(tr);
       });
 
       const labels = d.equity.map(x=>x[0]);
@@ -152,56 +168,71 @@ def index():
 
 @app.route("/data")
 def data():
-    # state
-    state = "RUNNING"
-    if USE_DB:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    if db_ok:
         try:
-            state = get_state()
+            # מצב ריצה
+            state = db_exec("select state from bot_state where id=1;", fetch=True)
+            state = (state[0][0] if state else "RUNNING") or "RUNNING"
+
+            # טריידים אחרונים (50 אחרונים, חדשים למעלה)
+            trades_rows = db_exec(
+                "select time, connector, symbol, type, side, price, qty, pnl, equity "
+                "from trades order by time desc limit 50;", fetch=True)
+            # נהפוך כדי להציג מהישן לחדש בטבלה:
+            trades = [list(map(lambda x: x if not isinstance(x, float) else float(x), row))
+                      for row in trades_rows[::-1]]
+
+            # אקוויטי (300 נק׳ אחרונות, מוכרחות להיות בסדר כרונולוגי)
+            equity_rows = db_exec(
+                "select time, equity from equity_curve order by time asc limit 300;", fetch=True)
+            equity = [[r[0].strftime("%Y-%m-%d %H:%M:%S"), float(r[1])] for r in equity_rows]
+
+            return jsonify({
+                "now": now,
+                "state": state,
+                "trades": trades,
+                "equity": equity,
+                "note": "" if (trades or equity) else "No DB data yet"
+            })
         except Exception as e:
-            state = "RUNNING"
+            # נפילה בקריאה מה־DB — נחזיר אינדיקציה
+            return jsonify({
+                "now": now,
+                "state": "UNKNOWN",
+                "trades": [],
+                "equity": [],
+                "note": f"DB error: {e}"
+            })
 
-    # trades
-    trades = []
-    if os.path.exists(TRADES_CSV):
-        try:
-            df = pd.read_csv(TRADES_CSV)
-            if not df.empty:
-                last = df.tail(50)
-                trades = last.values.tolist()
-        except Exception:
-            pass
-
-    # equity
-    equity = []
-    if os.path.exists(EQUITY_CSV):
-        try:
-            df2 = pd.read_csv(EQUITY_CSV)
-            if not df2.empty:
-                eq = df2.tail(300)
-                equity = [[str(t), float(v)] for t, v in zip(eq["time"], eq["equity"])]
-        except Exception:
-            pass
-
+    # אם אין DB בכלל (מקרה קצה): נחזיר מצב סטטי.
     return jsonify({
-        "now": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-        "state": state,
-        "trades": trades,
-        "equity": equity,
-        "note": "" if (trades or equity) else "No CSV data yet"
+        "now": now,
+        "state": "UNKNOWN",
+        "trades": [],
+        "equity": [],
+        "note": "No DATABASE_URL set for dashboard"
     })
 
 @app.route("/resume", methods=["POST"])
 def resume():
-    if USE_DB:
-        try: set_state("RUNNING")
-        except Exception: pass
+    if db_ok:
+        try:
+            db_exec("insert into bot_state (id, state, updated_at) values (1, 'RUNNING', now()) "
+                    "on conflict (id) do update set state=excluded.state, updated_at=now();")
+        except Exception as e:
+            print(f"[Dashboard] resume() DB error: {e}")
     return ("OK", 200)
 
 @app.route("/pause", methods=["POST"])
 def pause():
-    if USE_DB:
-        try: set_state("PAUSED")
-        except Exception: pass
+    if db_ok:
+        try:
+            db_exec("insert into bot_state (id, state, updated_at) values (1, 'PAUSED', now()) "
+                    "on conflict (id) do update set state=excluded.state, updated_at=now();")
+        except Exception as e:
+            print(f"[Dashboard] pause() DB error: {e}")
     return ("OK", 200)
 
 if __name__ == "__main__":
