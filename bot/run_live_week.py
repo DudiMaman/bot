@@ -2,10 +2,10 @@
 # ------------------------------------------------------------
 # Trading bot (weekly loop) with:
 # - Safe filtering of config keys for DonchianTrendADXRSI / TradeManager
-# - Valid symbol filtering from exchange (Bybit testnet via CCXT)
-# - Robust try/except around data fetches (no crashes on single symbol failure)
+# - AUTO symbol discovery from Bybit (testnet) via CCXT
+# - Valid symbol filtering + min-qty / min-notional / precision alignment
+# - Robust try/except around data fetches
 # - Dual logging: CSV files + optional Postgres via DB if DATABASE_URL is set
-# - Quantity normalization against exchange precision & min limits (ccxt)
 # ------------------------------------------------------------
 
 import os
@@ -19,20 +19,19 @@ import pandas as pd
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# Ensure local package imports work both "python -m bot.run_live_week" and direct
+# Ensure imports
 THIS_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.dirname(THIS_DIR)
-if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
-if THIS_DIR not in sys.path:
-    sys.path.append(THIS_DIR)
+for p in (ROOT_DIR, THIS_DIR):
+    if p not in sys.path:
+        sys.path.append(p)
 
 # Bot package imports
 from bot.strategies import DonchianTrendADXRSI
 from bot.risk import RiskManager, TradeManager
 from bot.utils import atr as calc_atr
 from bot.connectors.ccxt_connector import CCXTConnector
-from bot.db_writer import DB  # provides write_trade(dict), write_equity(dict)
+from bot.db_writer import DB  # optional Postgres
 
 # Optional Alpaca connector
 try:
@@ -40,16 +39,15 @@ try:
 except Exception:
     AlpacaConnector = None
 
-# Paths for CSV logging
+# CSV logging
 LOG_DIR = os.path.join(THIS_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 TRADES_CSV = os.path.join(LOG_DIR, "trades.csv")
 EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
 
-
-# ------------------------------------------------------------
+# ------------------------
 # Utilities
-# ------------------------------------------------------------
+# ------------------------
 def write_csv(path: str, header: list[str], rows: list[list]):
     new_file = not os.path.exists(path)
     with open(path, "a", newline="", encoding="utf-8") as fh:
@@ -59,76 +57,42 @@ def write_csv(path: str, header: list[str], rows: list[list]):
         for r in rows:
             w.writerow(r)
 
+def round_step(x: float, step: float) -> float:
+    if step <= 0:
+        return x
+    return math.floor(x / step) * step
 
-def resample_htf(df: pd.DataFrame, htf: str) -> pd.DataFrame:
-    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    return df.resample(htf).agg(agg).dropna()
-
+def determine_amount_step(market: dict) -> float:
+    """
+    Try to derive a quantity step from market precision / limits.
+    """
+    step = 1e-6
+    prec = (market or {}).get('precision') or {}
+    # If precision.amount is number of decimals:
+    if 'amount' in prec and isinstance(prec['amount'], int):
+        # amount=decimals, so step=10^{-decimals}
+        step = 10 ** (-prec['amount'])
+    else:
+        # Sometimes step is given under limits.amount.step
+        lim_amt = (market or {}).get('limits', {}).get('amount', {}) or {}
+        step = float(lim_amt.get('step') or step)
+    return max(step, 1e-12)
 
 def prepare_features(ltf_df: pd.DataFrame, htf_df: pd.DataFrame, strat: DonchianTrendADXRSI) -> pd.DataFrame:
-    """Call strategy.prepare() and attach ATR(14) from LTF."""
     f = strat.prepare(ltf_df, htf_df)
     f["atr"] = calc_atr(ltf_df, 14)
     return f
 
-
-def normalize_qty(exchange, symbol: str, qty: float, price: float) -> float:
-    """
-    Normalize quantity against exchange precision and raise to min amount/cost if needed.
-    Returns >0 float if feasible, otherwise 0.0
-    """
-    if qty is None or qty <= 0:
-        return 0.0
-
-    # Try to get market metadata
-    market = None
-    try:
-        market = exchange.markets.get(symbol) or exchange.market(symbol)
-    except Exception:
-        pass
-
-    # Precision -> amount_to_precision
-    try:
-        qty = float(exchange.amount_to_precision(symbol, qty))
-    except Exception:
-        qty = float(f"{qty:.8f}")
-
-    # Limits
-    min_amt = None
-    min_cost = None
-    if market:
-        limits = market.get("limits") or {}
-        amt_limits = limits.get("amount") or {}
-        cost_limits = limits.get("cost") or {}
-        min_amt = amt_limits.get("min")
-        min_cost = cost_limits.get("min")
-
-    if min_amt is not None and qty < min_amt:
-        qty = min_amt
-
-    if min_cost is not None and price and price > 0:
-        if qty * price < min_cost:
-            qty = (min_cost / price)
-
-    # Round again after adjustments
-    try:
-        qty = float(exchange.amount_to_precision(symbol, qty))
-    except Exception:
-        qty = float(f"{qty:.8f}")
-
-    return qty if qty > 0 else 0.0
-
-
-# ------------------------------------------------------------
+# ------------------------
 # Main
-# ------------------------------------------------------------
+# ------------------------
 def main():
     # 1) Load env + config
     load_dotenv()
     with open(os.path.join(THIS_DIR, "config.yml"), "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
-    # 2) Init DB if available
+    # 2) Optional DB
     db = None
     database_url = os.getenv("DATABASE_URL")
     if database_url:
@@ -138,7 +102,7 @@ def main():
             print(f"[WARN] DB init failed: {e}")
             db = None
 
-    # 3) Build Strategy / TradeManager with safe filtering of keys
+    # 3) Strategy / TradeManager (safe filtering)
     raw_s = cfg.get("strategy", {}) or {}
     accepted_s = set(inspect.signature(DonchianTrendADXRSI).parameters.keys())
     clean_s = {k: v for k, v in raw_s.items() if k in accepted_s}
@@ -164,7 +128,7 @@ def main():
         max_position_pct=float(portfolio.get("max_position_pct", 0.10)),
     )
 
-    # 5) Initial equity log (CSV + DB if available)
+    # 5) Initial equity log
     now_utc = datetime.now(timezone.utc)
     write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
     if db:
@@ -173,7 +137,7 @@ def main():
         except Exception as e:
             print(f"[WARN] DB write_equity init failed: {e}")
 
-    # 6) Build connectors + filter valid symbols from exchange
+    # 6) Connectors + AUTO symbol discovery + valid symbol filter
     conns: list[tuple[dict, object]] = []
     live_connectors = cfg.get("live_connectors", []) or []
     for c in live_connectors:
@@ -199,8 +163,28 @@ def main():
             print(f"❌ init() failed for connector {c.get('name','?')}: {repr(e)}")
             continue
 
+        # load markets so we can AUTO and validate
+        try:
+            markets = conn.exchange.load_markets()
+        except Exception as e:
+            print(f"❌ load_markets() failed: {e}")
+            markets = {}
+
+        requested_syms = list(c.get("symbols", []) or [])
+        if "AUTO" in requested_syms:
+            # pick up to ~25 USDT spot pairs that are active
+            auto_syms = [
+                m for m,info in markets.items()
+                if info.get('type','spot') == 'spot'
+                and info.get('quote') == 'USDT'
+                and info.get('active', True)
+            ]
+            auto_syms = auto_syms[:25]
+            cfg_syms = auto_syms
+        else:
+            cfg_syms = requested_syms
+
         available = set(getattr(conn.exchange, "symbols", []) or [])
-        cfg_syms = list(c.get("symbols", []) or [])
         valid_syms = [s for s in cfg_syms if s in available]
 
         if not valid_syms:
@@ -222,7 +206,7 @@ def main():
     write_csv(TRADES_CSV, ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"], [])
 
     # Runtime state
-    open_positions: dict = {}   # key=(connector_name, symbol) -> position dict
+    open_positions: dict = {}   # key=(connector_name, symbol)
     cooldowns: dict = {}
     last_bar_ts: dict = {}
     start_time = time.time()
@@ -236,8 +220,8 @@ def main():
 
         # Fetch & features
         for c_cfg, conn in conns:
-            tf = c_cfg.get("timeframe", "15m")
-            htf = c_cfg.get("htf_timeframe", "1h")
+            tf = c_cfg.get("timeframe", "1m")
+            htf = c_cfg.get("htf_timeframe", "15m")
             for sym in c_cfg.get("symbols", []):
                 try:
                     ltf_df = conn.fetch_ohlcv(sym, tf, limit=600)
@@ -250,7 +234,7 @@ def main():
                     print(f"⏭️ skip {sym}: {repr(e)}")
                     continue
 
-        # Progress check (new bars?)
+        # Progress check
         progressed_any = False
         for key, row in snapshots.items():
             ts = row.name
@@ -262,7 +246,7 @@ def main():
             time.sleep(15)
             if time.time() - start_time >= SECONDS_IN_WEEK:
                 break
-            # still log equity periodically
+            # log equity periodically anyway
             write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
             if db:
                 try:
@@ -351,7 +335,7 @@ def main():
         for key in to_close:
             open_positions.pop(key, None)
 
-        # Entries (use normalize_qty and conn.exchange)
+        # Entries
         for c_cfg, conn in conns:
             for sym in c_cfg.get("symbols", []):
                 key = (c_cfg.get("name", "ccxt"), sym)
@@ -378,15 +362,41 @@ def main():
                 if R <= 0:
                     continue
 
-                # Position sizing (risk & cap)
-                qty_risk = (equity * rm.risk_per_trade) / R
-                qty_cap = (equity * rm.max_position_pct) / max(price, 1e-9)
-                raw_qty = max(0.0, min(qty_risk, qty_cap))
+                # ----- NEW: align with market min qty / min cost / precision -----
+                market = None
+                try:
+                    market = conn.exchange.market(sym)
+                except Exception:
+                    market = {}
 
-                # Respect exchange precision & minimums
-                qty = normalize_qty(conn.exchange, sym, raw_qty, price)
+                step = determine_amount_step(market)
+                lot_limits = (market or {}).get('limits', {}).get('amount', {}) or {}
+                cost_limits = (market or {}).get('limits', {}).get('cost', {}) or {}
+                min_qty  = lot_limits.get('min')
+                min_cost = cost_limits.get('min')
+
+                qty_risk = (equity * rm.risk_per_trade) / max(R, 1e-12)
+                qty_cap  = (equity * rm.max_position_pct) / max(price, 1e-9)
+                qty      = max(0.0, min(qty_risk, qty_cap))
+
+                # round to step
+                qty = round_step(qty, step)
+
+                # enforce min qty
+                if (min_qty is not None) and (qty < float(min_qty)):
+                    qty = float(min_qty)
+
+                # enforce min notional
+                notional = qty * price
+                if (min_cost is not None) and (notional < float(min_cost)):
+                    needed_qty = float(min_cost) / max(price, 1e-9)
+                    qty = max(qty, round_step(needed_qty, step))
+
+                # final round and validate
+                qty = round_step(qty, step)
                 if qty <= 0:
                     continue
+                # ----- END market alignment -----
 
                 tp1 = price + tm.r1_R * R if side == "long" else price - tm.r1_R * R
                 tp2 = price + tm.r2_R * R if side == "long" else price - tm.r2_R * R
@@ -408,25 +418,14 @@ def main():
                     [now_utc.isoformat(), key[0], key[1], "ENTER", side, f"{price:.8f}", f"{qty:.8f}", "", f"{equity:.2f}"]
                 )
 
-        # Persist logs (CSV + optional DB)
+        # Persist logs
         if rows_trades:
             write_csv(TRADES_CSV, ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"], rows_trades)
-            if db and hasattr(db, "write_trade"):
-                for r in rows_trades:
-                    try:
-                        db.write_trade({
-                            "time": r[0],
-                            "connector": r[1],
-                            "symbol": r[2],
-                            "type": r[3],
-                            "side": r[4],
-                            "price": float(r[5]) if r[5] else None,
-                            "qty": float(r[6]) if r[6] else None,
-                            "pnl": float(r[7]) if (r[7] not in ("", None)) else None,
-                            "equity": float(r[8]) if r[8] else None,
-                        })
-                    except Exception as e:
-                        print(f"[WARN] DB write_trade failed: {e}")
+            if db:
+                try:
+                    db.write_trades(rows_trades)
+                except Exception as e:
+                    print(f"[WARN] DB write_trades failed: {e}")
 
         write_csv(EQUITY_CSV, ["time", "equity"], [[now_utc.isoformat(), f"{equity:.2f}"]])
         if db:
@@ -440,7 +439,6 @@ def main():
             break
 
         time.sleep(30)
-
 
 if __name__ == "__main__":
     main()
