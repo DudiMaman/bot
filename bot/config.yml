@@ -4,29 +4,24 @@ live_connectors:
     exchange_id: bybit
     paper: true
     default_type: spot
-    symbols:
-      - "BTC/USDT"
-      - "ETH/USDT"
-      - "SOL/USDT"
-      - "XRP/USDT"
-      - "ADA/USDT"
-    timeframe: "1m"     # קצר יותר כדי לראות יותר אירועים
-    htf_timeframe: "30m" # HTF קצר יחסית
+    symbols: ["AUTO"]   # ניגש לשוק ויבחר אוטומטית עד ~25 זוגות USDT זמינים
+    timeframe: "1m"
+    htf_timeframe: "15m"
 
 strategy:
-  donchian_len: 10      # היה 20 → עכשיו 10 כדי לקבל יותר פריצות
-  adx_min: 8           # היה גבוה יותר → עכשיו 12 כדי לא לחסום יותר מדי
+  donchian_len: 6      # קצר כדי להגדיל סיכוי לסיגנלים
+  adx_min: 0           # מבטל סף ADX בסשן בדיקה
 
 trade_manager:
-  atr_k_sl: 0.8       # היה 1.2–1.5 → מקטין R → מגדיל כמות
-  r1_R: 0.5
-  r2_R: 1.0
+  atr_k_sl: 0.7        # R קטן -> כמות גדולה יותר
+  r1_R: 0.4
+  r2_R: 0.8
   p1_pct: 0.5
   p2_pct: 0.5
-  be_after_R: 0.5
-  max_bars_in_trade: 30
+  be_after_R: 0.4
+  max_bars_in_trade: 40
 
 portfolio:
   equity0: 100000
-  risk_per_trade: 0.02   # 2% לעסקה (זמני כדי לקבל כניסה)
-  max_position_pct: 0.50 # מאפשר יותר הון לעסקה (תקרת בטיחות)
+  risk_per_trade: 0.03    # 3% זמני לבדיקות (אפשר להחזיר אח"כ)
+  max_position_pct: 0.70  # מאפשר להיכנס בכמות מספיקה גם כשמחיר גבוה
