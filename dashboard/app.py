@@ -1,240 +1,85 @@
 # dashboard/app.py
+# ================================================================
+# Trading Dashboard PRO — מעוצב עם Bootstrap + תצוגות מתקדמות
+# ================================================================
+
 import os
-from flask import Flask, jsonify, request, render_template_string
-from datetime import datetime, timezone
-
-USE_DB = bool(os.getenv("DATABASE_URL"))
-db_ok = False
-def db_exec(sql, params=None, fetch=False):
-    # ייקרא רק אם USE_DB True
-    import psycopg
-    with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or ())
-            if fetch:
-                return cur.fetchall()
-            return None
-
-def ensure_schema_dashboard():
-    """יוצר טבלאות מינימליות אם חסרות (זהה לסכימה שבבוט)"""
-    db_exec("""
-        create table if not exists trades(
-          time timestamptz not null,
-          connector text,
-          symbol text,
-          type text,
-          side text,
-          price double precision,
-          qty double precision,
-          pnl double precision,
-          equity double precision
-        );""")
-    db_exec("""
-        create table if not exists equity_curve(
-          time timestamptz primary key,
-          equity double precision
-        );""")
-    db_exec("""
-        create table if not exists bot_state(
-          id int primary key default 1,
-          state text not null default 'RUNNING',
-          updated_at timestamptz not null default now()
-        );""")
-    db_exec("insert into bot_state (id) values (1) on conflict (id) do nothing;")
-
-# ננסה להתחבר ולוודא סכימה פעם אחת בעת עליית השירות
-if USE_DB:
-    try:
-        ensure_schema_dashboard()
-        db_ok = True
-    except Exception as e:
-        print(f"[Dashboard] DB unavailable: {e}")
-        db_ok = False
+import pandas as pd
+from datetime import datetime
+from flask import Flask, render_template, request, send_file
+import pytz
 
 app = Flask(__name__)
 
-HTML = """
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Trading Bot Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-  body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:20px; color:#111; }
-  .header { display:flex; align-items:center; gap:16px; }
-  .badge { padding:8px 14px; border-radius:999px; font-weight:700; }
-  .stopped { background:#fee2e2; color:#991b1b; }
-  .running { background:#dcfce7; color:#166534; }
-  .btn { padding:10px 16px; border-radius:12px; border:1px solid #ddd; background:#fff; cursor:pointer; font-weight:600; }
-  .btn:hover { background:#f7f7f7; }
-  .muted { color:#777; }
-  .grid { display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:18px; }
-  .card { border:1px solid #eee; border-radius:16px; padding:16px; }
-  table { width:100%; border-collapse:separate; border-spacing:0; }
-  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid #f0f0f0; }
-  th { background:#fafafa; font-weight:700; }
-  #chart { height:420px; }
-</style>
-</head>
-<body>
-  <div class="header">
-    <h1 style="margin:0;">Trading Bot Dashboard</h1>
-    <div class="muted">Last refresh: <span id="last-refresh">—</span></div>
-    <div id="status" class="badge stopped">STOPPED</div>
-    <button class="btn" onclick="post('/resume')">Resume</button>
-    <button class="btn" onclick="post('/pause')">Pause</button>
-    <div id="note" class="muted">No updates yet</div>
-  </div>
+# נתיבי קבצים
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BOT_DIR = os.path.join(BASE_DIR, "..", "bot")
+LOG_DIR = os.path.join(BOT_DIR, "logs")
+TRADES_CSV = os.path.join(LOG_DIR, "trades.csv")
+EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
 
-  <div class="grid">
-    <div class="card">
-      <h2 style="margin-top:0;">Recent Trades</h2>
-      <table id="trades">
-        <thead>
-          <tr>
-            <th>Time</th><th>Connector</th><th>Symbol</th><th>Type</th>
-            <th>Side</th><th>Price</th><th>Qty</th><th>PnL</th><th>Equity</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
+TZ = pytz.timezone("Asia/Jerusalem")  # תיקון אזור זמן
 
-    <div class="card">
-      <h2 style="margin-top:0;">Equity Curve</h2>
-      <canvas id="chart"></canvas>
-    </div>
-  </div>
+def read_trades():
+    if not os.path.exists(TRADES_CSV):
+        return pd.DataFrame(columns=["time","connector","symbol","type","side","price","qty","pnl","equity"])
+    df = pd.read_csv(TRADES_CSV)
+    df["time"] = pd.to_datetime(df["time"]).dt.tz_convert(TZ)
+    df["PnL%"] = ((df["pnl"].fillna(0) / (df["equity"].shift(1).fillna(df["equity"]))) * 100).round(2)
+    df["status"] = df["type"].apply(lambda x: "Open" if x == "ENTER" else "Closed")
+    return df
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-  let chart;
+def read_equity():
+    if not os.path.exists(EQUITY_CSV):
+        return pd.DataFrame(columns=["time","equity"])
+    df = pd.read_csv(EQUITY_CSV)
+    df["time"] = pd.to_datetime(df["time"]).dt.tz_convert(TZ)
+    return df
 
-  function post(path){
-    fetch(path, {method:'POST'}).then(()=>refresh());
-  }
+@app.route("/", methods=["GET", "POST"])
+def dashboard():
+    df = read_trades()
+    eq = read_equity()
 
-  function setStatus(s){
-    const el = document.getElementById('status');
-    el.textContent = s;
-    el.className = 'badge ' + (s === 'RUNNING' ? 'running' : 'stopped');
-  }
+    # ===== פילטרים =====
+    start = request.args.get("start")
+    end = request.args.get("end")
+    symbol = request.args.get("symbol")
+    side = request.args.get("side")
 
-  function refresh(){
-    fetch('/data').then(r=>r.json()).then(d=>{
-      document.getElementById('last-refresh').textContent = d.now;
-      setStatus(d.state);
-      const tbody = document.querySelector('#trades tbody');
-      tbody.innerHTML = '';
-      d.trades.forEach(row=>{
-        const tr = document.createElement('tr');
-        row.forEach(cell=>{
-          const td = document.createElement('td');
-          td.textContent = cell;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
+    if start:
+        df = df[df["time"] >= pd.to_datetime(start)]
+    if end:
+        df = df[df["time"] <= pd.to_datetime(end)]
+    if symbol and symbol != "ALL":
+        df = df[df["symbol"] == symbol]
+    if side and side != "ALL":
+        df = df[df["side"].str.lower() == side.lower()]
 
-      const labels = d.equity.map(x=>x[0]);
-      const values = d.equity.map(x=>x[1]);
-      if(!chart){
-        const ctx = document.getElementById('chart').getContext('2d');
-        chart = new Chart(ctx, {
-          type:'line',
-          data:{ labels:labels, datasets:[{ label:'Equity', data:values, tension:0.2, borderWidth:2 }] },
-          options:{ responsive:true, maintainAspectRatio:false, scales:{ x:{display:false} } }
-        });
-      } else {
-        chart.data.labels = labels;
-        chart.data.datasets[0].data = values;
-        chart.update();
-      }
-      document.getElementById('note').textContent = d.note || '';
-    });
-  }
-  setInterval(refresh, 10000);
-  refresh();
-</script>
-</body>
-</html>
-"""
+    # ===== סיכום עסקאות פתוחות =====
+    open_trades = df[df["type"] == "ENTER"]
+    closed_trades = df[df["type"].isin(["SL", "TP1", "TP2", "TIME"])]
+    open_positions = len(open_trades) - len(closed_trades)
+    unrealized_pnl = df[df["type"] == "ENTER"]["pnl"].sum() if not df.empty else 0
+    exposure = df[df["type"] == "ENTER"]["qty"].sum() if not df.empty else 0
 
-@app.route("/")
-def index():
-    return render_template_string(HTML)
+    return render_template(
+        "dashboard.html",
+        trades=df.sort_values("time", ascending=False),
+        equity=eq,
+        symbols=sorted(df["symbol"].unique()) if not df.empty else [],
+        open_positions=open_positions,
+        exposure=exposure,
+        unrealized_pnl=unrealized_pnl,
+        start=start,
+        end=end,
+        side=side or "ALL",
+        symbol=symbol or "ALL"
+    )
 
-@app.route("/data")
-def data():
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    if db_ok:
-        try:
-            # מצב ריצה
-            state = db_exec("select state from bot_state where id=1;", fetch=True)
-            state = (state[0][0] if state else "RUNNING") or "RUNNING"
-
-            # טריידים אחרונים (50 אחרונים, חדשים למעלה)
-            trades_rows = db_exec(
-                "select time, connector, symbol, type, side, price, qty, pnl, equity "
-                "from trades order by time desc limit 50;", fetch=True)
-            # נהפוך כדי להציג מהישן לחדש בטבלה:
-            trades = [list(map(lambda x: x if not isinstance(x, float) else float(x), row))
-                      for row in trades_rows[::-1]]
-
-            # אקוויטי (300 נק׳ אחרונות, מוכרחות להיות בסדר כרונולוגי)
-            equity_rows = db_exec(
-                "select time, equity from equity_curve order by time asc limit 300;", fetch=True)
-            equity = [[r[0].strftime("%Y-%m-%d %H:%M:%S"), float(r[1])] for r in equity_rows]
-
-            return jsonify({
-                "now": now,
-                "state": state,
-                "trades": trades,
-                "equity": equity,
-                "note": "" if (trades or equity) else "No DB data yet"
-            })
-        except Exception as e:
-            # נפילה בקריאה מה־DB — נחזיר אינדיקציה
-            return jsonify({
-                "now": now,
-                "state": "UNKNOWN",
-                "trades": [],
-                "equity": [],
-                "note": f"DB error: {e}"
-            })
-
-    # אם אין DB בכלל (מקרה קצה): נחזיר מצב סטטי.
-    return jsonify({
-        "now": now,
-        "state": "UNKNOWN",
-        "trades": [],
-        "equity": [],
-        "note": "No DATABASE_URL set for dashboard"
-    })
-
-@app.route("/resume", methods=["POST"])
-def resume():
-    if db_ok:
-        try:
-            db_exec("insert into bot_state (id, state, updated_at) values (1, 'RUNNING', now()) "
-                    "on conflict (id) do update set state=excluded.state, updated_at=now();")
-        except Exception as e:
-            print(f"[Dashboard] resume() DB error: {e}")
-    return ("OK", 200)
-
-@app.route("/pause", methods=["POST"])
-def pause():
-    if db_ok:
-        try:
-            db_exec("insert into bot_state (id, state, updated_at) values (1, 'PAUSED', now()) "
-                    "on conflict (id) do update set state=excluded.state, updated_at=now();")
-        except Exception as e:
-            print(f"[Dashboard] pause() DB error: {e}")
-    return ("OK", 200)
+@app.route("/download")
+def download_csv():
+    return send_file(TRADES_CSV, as_attachment=True, download_name="trades.csv")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=5000)
