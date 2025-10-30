@@ -15,18 +15,18 @@ live_connectors:
 
 strategy:
   donchian_len: 10      # היה 20 → עכשיו 10 כדי לקבל יותר פריצות
-  adx_min: 12           # היה גבוה יותר → עכשיו 12 כדי לא לחסום יותר מדי
+  adx_min: 8           # היה גבוה יותר → עכשיו 12 כדי לא לחסום יותר מדי
 
 trade_manager:
-  atr_k_sl: 1.5
-  r1_R: 1.0
-  r2_R: 2.0
+  atr_k_sl: 0.8       # היה 1.2–1.5 → מקטין R → מגדיל כמות
+  r1_R: 0.5
+  r2_R: 1.0
   p1_pct: 0.5
   p2_pct: 0.5
-  be_after_R: 0.8
-  max_bars_in_trade: 48
+  be_after_R: 0.5
+  max_bars_in_trade: 30
 
 portfolio:
   equity0: 100000
-  risk_per_trade: 0.005
-  max_position_pct: 0.10
+  risk_per_trade: 0.02   # 2% לעסקה (זמני כדי לקבל כניסה)
+  max_position_pct: 0.50 # מאפשר יותר הון לעסקה (תקרת בטיחות)
