@@ -2,7 +2,7 @@
 # ------------------------------------------------------------
 # Trading bot (weekly loop) with:
 # - Safe key filtering for DonchianTrendADXRSI / TradeManager
-# - AUTO symbol discovery (Bybit via CCXT)
+# - AUTO symbol discovery (Bybit via CCXT): "AUTO", "AUTO:USDT", "AUTO:USDT:50"
 # - Valid symbol filtering + min-qty/min-notional/precision
 # - Fallback signal logic (Donchian breakout) if strategy yields no signals
 # - Robust try/except and dual logging (CSV + optional Postgres)
@@ -183,42 +183,83 @@ def main():
             print(f"ℹ️ Unknown connector type '{ctype}' — skipping.")
             continue
 
+        # init exchange
         try:
             conn.init()
         except Exception as e:
             print(f"❌ init() failed for connector {c.get('name','?')}: {repr(e)}")
             continue
 
+        # load markets (populates conn.exchange.symbols + markets dict)
         try:
             markets = conn.exchange.load_markets()
         except Exception as e:
             print(f"❌ load_markets() failed: {e}")
             markets = {}
 
+        all_symbols = set(getattr(conn.exchange, "symbols", []) or [])
         requested_syms = list(c.get("symbols", []) or [])
-        if "AUTO" in requested_syms:
-            auto_syms = [
-                m for m,info in markets.items()
-                if info.get('type','spot') == 'spot'
-                and info.get('quote') == 'USDT'
-                and info.get('active', True)
-            ][:50]  # מרחיבים עד 50 כדי להגדיל סיכוי
-            cfg_syms = requested_syms + auto_syms
-        else:
-            cfg_syms = requested_syms
 
-        available = set(getattr(conn.exchange, "symbols", []) or [])
-        valid_syms = [s for s in cfg_syms if s in available]
+        # --- AUTO syntax: "AUTO", "AUTO:USDT", "AUTO:USDT:50"
+        auto_mode = any(isinstance(s, str) and s.upper().startswith("AUTO") for s in requested_syms)
+        if auto_mode:
+            raw_auto = next(s for s in requested_syms if isinstance(s, str) and s.upper().startswith("AUTO"))
+            parts = raw_auto.split(":")
+            quote = (parts[1].upper() if len(parts) >= 2 and parts[1] else "USDT")
+            # parse limit
+            limit_n = 30
+            if len(parts) >= 3:
+                try:
+                    limit_n = int(parts[2])
+                except Exception:
+                    limit_n = 30
+
+            # collect spot + quote symbols; prefer active or status Trading
+            auto_syms = []
+            for m, info in (markets or {}).items():
+                try:
+                    q = (info.get("quote") or info.get("quoteId") or "").upper()
+                    status = (info.get("info", {}) or {}).get("status", "")
+                    is_active = info.get("active", True)
+                    typ = info.get("type")
+                    is_spot = (typ == "spot") or (info.get("spot") is True)
+                    if q == quote and is_spot and (is_active or status in ("Trading", "trading")):
+                        auto_syms.append(m)
+                except Exception:
+                    continue
+
+            # sort by 24h volume if available (fallback 0.0), then cut to limit_n
+            def _vol_key(sym):
+                inf = (markets.get(sym, {}) or {}).get("info", {}) if markets else {}
+                for k in ("volume24h", "quoteVolume", "turnover24h", "24hTurnover"):
+                    v = inf.get(k)
+                    if v is not None:
+                        try:
+                            return float(v)
+                        except Exception:
+                            continue
+                return 0.0
+
+            auto_syms = sorted(auto_syms, key=_vol_key, reverse=True)[:max(1, int(limit_n))]
+            cfg_syms_expanded = auto_syms
+            requested_count = f"AUTO({quote},{limit_n})"
+        else:
+            # regular static list (ignore any stray "AUTO" strings)
+            cfg_syms_expanded = [s for s in requested_syms if not (isinstance(s, str) and s.upper().startswith("AUTO"))]
+            requested_count = f"{len(requested_syms)}"
+
+        # final validity check vs exchange.symbols
+        valid_syms = [s for s in cfg_syms_expanded if s in all_symbols]
 
         if not valid_syms:
             print(
                 f"⚠️ No valid symbols for connector '{c.get('name','ccxt')}'. "
-                f"Requested={len(cfg_syms)}, Available={len(available)}"
+                f"Requested={requested_count}, Available={len(all_symbols)}"
             )
         else:
             print(
                 f"✅ Connector '{c.get('name','ccxt')}' loaded {len(valid_syms)} valid symbols "
-                f"(of {len(cfg_syms)} requested)."
+                f"(of {requested_count} requested)."
             )
 
         c_local = dict(c)
