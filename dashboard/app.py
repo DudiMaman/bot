@@ -19,6 +19,30 @@ EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 
+# ===== יצירת תיקיות/קבצים חסרים אוטומטית =====
+def _ensure_logs_and_headers():
+    """
+    דואג שתיקיית הלוגים וקבצי ה-CSV קיימים.
+    אם קובץ חסר—ייווצר עם כותרות בלבד.
+    לא מוסיף שורות נתונים פיקטיביות.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    if not os.path.exists(TRADES_CSV):
+        with open(TRADES_CSV, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"])
+
+    if not os.path.exists(EQUITY_CSV):
+        with open(EQUITY_CSV, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["time", "equity"])
+
+
+# נקרא פעם אחת בעת עליית המודול/האפליקציה
+_ensure_logs_and_headers()
+
+
 # ===== עזרי קבצים =====
 def _read_csv(path, limit=None):
     """קורא CSV כ-list[dict]. אם limit סופק, יחזיר רק את הסוף. חסין לשגיאות קלות."""
@@ -28,12 +52,10 @@ def _read_csv(path, limit=None):
     try:
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            # יתכן שורה ריקה/שגויה – נדלג
             for row in reader:
                 if not row:
                     continue
-                # ננקה רווחים במפתחות
-                clean = { (k.strip() if isinstance(k, str) else k): v for k, v in row.items() }
+                clean = {(k.strip() if isinstance(k, str) else k): v for k, v in row.items()}
                 rows.append(clean)
     except Exception:
         # במקרה של קובץ שבור/קידוד לא תקין – נחזיר ריק ולא נפיל את השרת
@@ -212,6 +234,7 @@ def health():
             "status": st["status"],
             "last_equity_ts": st["last_equity_ts"],
             "age_sec": st["age_sec"],
+            "log_dir": LOG_DIR,
         }
     ), 200
 
