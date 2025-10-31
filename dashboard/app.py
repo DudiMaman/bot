@@ -1,5 +1,6 @@
 # dashboard/app.py
 <<<<<<< HEAD
+<<<<<<< HEAD
 import os, csv, io
 from datetime import datetime, timezone
 from flask import Flask, render_template, jsonify, send_file
@@ -89,6 +90,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
 =======
+=======
+>>>>>>> parent of 4b323cb (Update app.py)
 # ================================================================
 # Trading Dashboard PRO — מעוצב עם Bootstrap + תצוגות מתקדמות
 # ================================================================
@@ -173,4 +176,7 @@ def download_csv():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+<<<<<<< HEAD
+>>>>>>> parent of 4b323cb (Update app.py)
+=======
 >>>>>>> parent of 4b323cb (Update app.py)
