@@ -18,6 +18,7 @@ import inspect
 import pandas as pd
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+from bot.monitor import start_heartbeat
 
 THIS_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.dirname(THIS_DIR)
@@ -112,6 +113,7 @@ def prepare_features(ltf_df: pd.DataFrame, htf_df: pd.DataFrame, strat: Donchian
 # Main
 # ------------------------
 def main():
+    hb_thread = start_heartbeat()
     # 1) Load env + config
     load_dotenv()
     with open(os.path.join(THIS_DIR, "config.yml"), "r", encoding="utf-8") as f:
