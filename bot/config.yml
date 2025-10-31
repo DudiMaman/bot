@@ -4,24 +4,26 @@ live_connectors:
     exchange_id: bybit
     paper: true
     default_type: spot
-    symbols: ["AUTO", "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT"]  # AUTO + כמה גיבויים
-    timeframe: "1m"
-    htf_timeframe: "5m"
+    symbols:
+      - "AUTO"          # נשלוף אוטומטית את כל סימבולי USDT הפעילים
+    timeframe: "1m"     # קצר – הרבה אירועים
+    htf_timeframe: "5m" # HTF קצר – יותר סיגנלים
 
 strategy:
-  donchian_len: 4    # קצר כדי לייצר יותר פריצות
-  adx_min: 0         # מבטל סינון ADX לבדיקות
+  lenient_fallback: true   # מצב מקל – יוצר יותר סיגנלים
+  donchian_len: 6          # קצר = יותר פריצות
+  adx_min: 0               # מבטל חסימה של ADX
 
 trade_manager:
-  atr_k_sl: 0.6
-  r1_R: 0.4
-  r2_R: 0.8
+  atr_k_sl: 0.8            # R קטן -> גודל פוזיציה גדול יותר
+  r1_R: 0.5
+  r2_R: 1.0
   p1_pct: 0.5
   p2_pct: 0.5
-  be_after_R: 0.4
-  max_bars_in_trade: 50
+  be_after_R: 0.5
+  max_bars_in_trade: 30
 
 portfolio:
   equity0: 100000
-  risk_per_trade: 0.03
-  max_position_pct: 0.70
+  risk_per_trade: 0.02     # 2% כדי לראות כניסות
+  max_position_pct: 0.50   # עד 50% הון לפוזיציה (תקרת בטיחות)
