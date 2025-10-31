@@ -181,16 +181,27 @@ def _pick_dashboard_template():
 @app.route("/")
 def index():
     tmpl = _pick_dashboard_template()
+    # סטטוס מאוחד: DB אם זמין; אחרת CSV
+    if _db_available():
+        try:
+            uni = current_status_db()
+        except Exception:
+            s = _bot_status()
+            uni = {"status": s["status"], "last_update": s["last_equity_ts"], "age_sec": s["age_sec"], "source": "csv"}
+    else:
+        s = _bot_status()
+        uni = {"status": s["status"], "last_update": s["last_equity_ts"], "age_sec": s["age_sec"], "source": "csv"}
+
     if tmpl:
-        return render_template(tmpl)
-    st = _bot_status()
+        return render_template(tmpl, unified_status=uni)
+
     return (
         f"<h1>Trading Dashboard</h1>"
-        f"<p>Status (CSV): <b>{st['status']}</b></p>"
-        f"<p>Last equity timestamp (CSV): {st['last_equity_ts']}</p>"
-        f"<p>Age (sec, CSV): {st['age_sec']}</p>"
+        f"<p>Status: <b>{uni['status']}</b> <small>(source: {uni['source']})</small></p>"
+        f"<p>Last update: {uni['last_update']}</p>"
+        f"<p>Age (sec): {uni['age_sec']}</p>"
         f"<p>LOG_DIR: {LOG_DIR}</p>"
-        f"<p>DB status endpoint: <code>/api/status_db</code></p>",
+        f"<p>Unified status API: <code>/api/status</code></p>",
         200,
         {"Content-Type": "text/html; charset=utf-8"},
     )
@@ -288,6 +299,7 @@ def api_trades_db():
         limit = 100
     rows = _rows_to_list(db_last_trades(limit=limit))
     return jsonify(rows)
+
 # ===== Unified status endpoint (prefers DB, falls back to CSV) =====
 def _status_csv_only():
     st = _bot_status()
