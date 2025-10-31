@@ -5,7 +5,7 @@ gunicorn==22.0.0
 numpy==2.3.2
 pandas==2.2.3
 
-# אם הדשבורד ניגש ל-Postgres (מומלץ כי עברנו ל-DB):
+# Postgres client (psycopg v3, כולל binary wheels)
 psycopg[binary]==3.2.3
 
 python-dateutil==2.9.0.post0
