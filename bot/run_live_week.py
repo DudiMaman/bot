@@ -18,6 +18,7 @@ import inspect
 import pandas as pd
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+from bot.safety import guard_open
 try:
     from bot.monitor import start_heartbeat
 except Exception:
