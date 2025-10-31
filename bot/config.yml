@@ -9,8 +9,8 @@ live_connectors:
     htf_timeframe: "5m"
 
 strategy:
-  donchian_len: 8    # קצר כדי לייצר יותר פריצות
-  adx_min: 5         # מבטל סינון ADX לבדיקות
+  donchian_len: 4    # קצר כדי לייצר יותר פריצות
+  adx_min: 0         # מבטל סינון ADX לבדיקות
 
 trade_manager:
   atr_k_sl: 0.6
