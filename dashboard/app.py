@@ -21,28 +21,61 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # ===== עזרי קבצים =====
 def _read_csv(path, limit=None):
-    """קורא CSV כ-list[dict]. אם limit סופק, יחזיר רק את הסוף."""
+    """קורא CSV כ-list[dict]. אם limit סופק, יחזיר רק את הסוף. חסין לשגיאות קלות."""
     rows = []
     if not os.path.exists(path):
         return rows
-    with open(path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            # יתכן שורה ריקה/שגויה – נדלג
+            for row in reader:
+                if not row:
+                    continue
+                # ננקה רווחים במפתחות
+                clean = { (k.strip() if isinstance(k, str) else k): v for k, v in row.items() }
+                rows.append(clean)
+    except Exception:
+        # במקרה של קובץ שבור/קידוד לא תקין – נחזיר ריק ולא נפיל את השרת
+        return []
     if limit:
-        return rows[-limit:]
-    return rows
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = None
+    return rows[-limit:] if limit else rows
 
 
 def _parse_iso(ts: str):
-    """ממיר טקסט לזמן. תומך ב־Z וב־+00:00 וגם בזמן בלי אזור."""
+    """ממיר טקסט לזמן. תומך ב־Z, +00:00, וגם בלי אזור."""
+    if not ts or not isinstance(ts, str):
+        return None
+    ts = ts.strip()
     if not ts:
         return None
     try:
-        # מחליף Z ב־+00:00 כדי להתאים ל-fromisoformat
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        # normalize "Z"
+        ts_norm = ts.replace("Z", "+00:00")
+        return datetime.fromisoformat(ts_norm)
     except Exception:
+        # נסיון פורמטים נפוצים
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(ts, fmt)
+                return dt.replace(tzinfo=APP_TZ)
+            except Exception:
+                continue
+    return None
+
+
+def _last_timestamp(row: dict):
+    """מחלץ timestamp מתוך שורה לפי מספר שמות מקובלים."""
+    if not isinstance(row, dict):
         return None
+    for key in ("time", "timestamp", "ts", "datetime"):
+        if key in row and row[key]:
+            return _parse_iso(row[key])
+    return None
 
 
 # ===== לוגיקת סטטוס =====
@@ -57,7 +90,7 @@ def _bot_status():
     if not eq_last:
         return {"status": "STOPPED", "last_equity_ts": None, "age_sec": None}
 
-    last_ts = _parse_iso(eq_last[-1].get("time"))
+    last_ts = _last_timestamp(eq_last[-1])
     if not last_ts:
         return {"status": "STOPPED", "last_equity_ts": None, "age_sec": None}
 
@@ -165,6 +198,22 @@ def download_csv_alias():
     if os.path.exists(TRADES_CSV):
         return send_file(TRADES_CSV, as_attachment=True, download_name="trades.csv")
     abort(404, description="trades.csv not found")
+
+
+@app.route("/health")
+def health():
+    """בדיקת בריאות פשוטה לפריסה/מוניטורינג."""
+    st = _bot_status()
+    return jsonify(
+        {
+            "ok": os.path.exists(TRADES_CSV) or os.path.exists(EQUITY_CSV),
+            "has_trades_csv": os.path.exists(TRADES_CSV),
+            "has_equity_csv": os.path.exists(EQUITY_CSV),
+            "status": st["status"],
+            "last_equity_ts": st["last_equity_ts"],
+            "age_sec": st["age_sec"],
+        }
+    ), 200
 
 
 if __name__ == "__main__":
