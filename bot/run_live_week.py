@@ -18,7 +18,12 @@ import inspect
 import pandas as pd
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from bot.monitor import start_heartbeat
+try:
+    from bot.monitor import start_heartbeat
+except Exception:
+    # בלם בטיחות: אם יש בעיה ב-monitor, לא מפילים את ה-worker
+    def start_heartbeat(*args, **kwargs): 
+        return None
 
 THIS_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.dirname(THIS_DIR)
