@@ -288,6 +288,26 @@ def api_trades_db():
         limit = 100
     rows = _rows_to_list(db_last_trades(limit=limit))
     return jsonify(rows)
+# ===== Unified status endpoint (prefers DB, falls back to CSV) =====
+def _status_csv_only():
+    st = _bot_status()
+    return {
+        "status": st["status"],
+        "last_update": st["last_equity_ts"],
+        "age_sec": st["age_sec"],
+        "source": "csv",
+    }
+
+@app.route("/api/status")
+def api_status_unified():
+    # אם יש DB ו-psycopg — נעדיף אותו
+    if _db_available():
+        try:
+            return jsonify(current_status_db())
+        except Exception:
+            pass
+    # נפילה חכמה ל-CSV (קיים כבר)
+    return jsonify(_status_csv_only())
 
 # ===== DEBUG (מאובטח ב־ENV) =====
 def _debug_enabled():
