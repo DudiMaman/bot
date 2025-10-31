@@ -50,129 +50,150 @@
   </div>
 </header>
 
-
-  <div class="wrap">
-    <div class="left">
-      <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <div class="title" style="font-size:14px;">Trades</div>
-          <div class="muted" id="tradesMeta">—</div>
-        </div>
-        <div style="overflow:auto; max-height:65vh;">
-          <table id="tradesTable">
-            <thead>
-              <tr>
-                <th>Time (UTC)</th><th>Connector</th><th>Symbol</th><th>Type</th>
-                <th>Side</th><th>Price</th><th>Qty</th><th>PnL</th><th>Equity</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+<div class="wrap">
+  <div class="left">
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div class="title" style="font-size:14px;">Trades</div>
+        <div class="muted" id="tradesMeta">—</div>
       </div>
-    </div>
-
-    <div class="right">
-      <div class="card" style="margin-bottom:16px;">
-        <div class="title" style="font-size:14px; margin-bottom:8px;">Equity</div>
-        <canvas id="eqChart"></canvas>
-        <div class="footer" style="margin-top:8px;">
-          <span class="muted">Auto refresh every 10s</span>
-        </div>
+      <div style="overflow:auto; max-height:65vh;">
+        <table id="tradesTable">
+          <thead>
+            <tr>
+              <th>Time (UTC)</th><th>Connector</th><th>Symbol</th><th>Type</th>
+              <th>Side</th><th>Price</th><th>Qty</th><th>PnL</th><th>Equity</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
   </div>
 
-  <script>
-    async function fetchData() {
-      const res = await fetch('/data', {cache:'no-store'});
-      if (!res.ok) return null;
-      return await res.json();
-    }
+  <div class="right">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="title" style="font-size:14px; margin-bottom:8px;">Equity</div>
+      <canvas id="eqChart"></canvas>
+      <div class="footer" style="margin-top:8px;">
+        <span class="muted">Auto refresh every 10s</span>
+      </div>
+    </div>
+  </div>
+</div>
 
-    function fmt(x, d=2) {
-      if (x === "" || x === null || x === undefined) return "";
-      const n = Number(x);
-      return isFinite(n) ? n.toFixed(d) : x;
-    }
+<script>
+/* ===== Helpers ===== */
+function fmtNum(n, d=2) {
+  if (n === null || n === undefined || n === '') return '—';
+  const x = Number(n);
+  if (!Number.isFinite(x)) return String(n);
+  return x.toLocaleString('en-US', { maximumFractionDigits: d });
+}
 
-    function setStatus(status, lastTs) {
-      const el = document.getElementById('statusBadge');
-      el.textContent = status;
-      el.className = 'badge ' + (status === 'RUNNING' ? 'ok' : 'err');
-      document.getElementById('lastRefresh').textContent = lastTs || '—';
-    }
+function setStatusBadge(status, source, ageSec, lastISO) {
+  const badge = document.getElementById('status-badge');
+  const lastRefresh = document.getElementById('lastRefresh');
+  if (!badge) return;
+  const ok = String(status).toUpperCase() === 'RUNNING';
+  badge.classList.remove('ok','err');
+  badge.classList.add(ok ? 'ok' : 'err');
+  const age = (ageSec != null) ? ` • ${ageSec}s` : '';
+  badge.textContent = `${ok ? 'RUNNING' : 'STOPPED'} (${source || '?'})${age}`;
+  if (lastRefresh) lastRefresh.textContent = lastISO || '—';
+}
 
-    function renderTrades(list) {
-      const tb = document.querySelector('#tradesTable tbody');
-      tb.innerHTML = '';
-      for (const r of list.slice(-500).reverse()) { // מציג 500 אחרונים
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${r.time ?? ''}</td>
-          <td>${r.connector ?? ''}</td>
-          <td>${r.symbol ?? ''}</td>
-          <td>${r.type ?? ''}</td>
-          <td>${r.side ?? ''}</td>
-          <td>${fmt(r.price, 6)}</td>
-          <td>${fmt(r.qty, 6)}</td>
-          <td>${fmt(r.pnl, 2)}</td>
-          <td>${fmt(r.equity, 2)}</td>
-        `;
-        tb.appendChild(tr);
-      }
-      document.getElementById('tradesMeta').textContent =
-        `${list.length} trades total (${Math.min(500, list.length)} shown)`;
-    }
+/* ===== Rendering ===== */
+function renderTrades(list) {
+  const tb = document.querySelector('#tradesTable tbody');
+  const meta = document.getElementById('tradesMeta');
+  if (!tb) return;
+  tb.innerHTML = '';
+  // מציג עד 500 אחרונות, חדשות למעלה
+  const rows = (list || []).slice(0, 500);
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const side = String(r.side || '').toUpperCase();
+    const sideColor = side === 'LONG' ? '#22c55e' : side === 'SHORT' ? '#60a5fa' : '#e5e7eb';
+    tr.innerHTML = `
+      <td>${r.time ?? ''}</td>
+      <td>${r.connector ?? ''}</td>
+      <td>${r.symbol ?? ''}</td>
+      <td>${r.type ?? ''}</td>
+      <td style="color:${sideColor}; font-weight:600">${side || '—'}</td>
+      <td style="text-align:right">${fmtNum(r.price, 8)}</td>
+      <td style="text-align:right">${fmtNum(r.qty, 6)}</td>
+      <td style="text-align:right">${fmtNum(r.pnl, 2)}</td>
+      <td style="text-align:right">${fmtNum(r.equity, 2)}</td>
+    `;
+    tb.appendChild(tr);
+  }
+  if (meta) meta.textContent = `rows: ${rows.length} • updated: ${new Date().toISOString()}`;
+}
 
-    // Equity “poor man chart”
-    function renderEquity(eq) {
-      const canvas = document.getElementById('eqChart');
-      const ctx = canvas.getContext('2d');
-      const w = canvas.clientWidth, h = canvas.clientHeight;
-      const scale = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(w * scale);
-      canvas.height = Math.floor(h * scale);
-      ctx.scale(scale, scale);
-      ctx.clearRect(0, 0, w, h);
+function renderEquity(eq) {
+  const canvas = document.getElementById('eqChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(w * scale);
+  canvas.height = Math.floor(h * scale);
+  ctx.scale(scale, scale);
+  ctx.clearRect(0, 0, w, h);
 
-      const vals = eq.map(e => Number(e.equity)).filter(v => isFinite(v));
-      if (vals.length < 2) {
-        ctx.fillStyle = '#9ca3af';
-        ctx.fillText('Not enough data', 10, 20);
-        return;
-      }
-      const min = Math.min(...vals), max = Math.max(...vals);
-      const pad = 10;
-      const xStep = (w - pad*2) / (vals.length - 1);
-      function y(v){ return pad + (h - pad*2) * (1 - (v - min) / Math.max(1e-9, (max - min))); }
+  const vals = (eq || []).map(e => Number(e.equity)).filter(v => Number.isFinite(v));
+  if (vals.length < 2) {
+    ctx.fillStyle = '#9ca3af';
+    ctx.fillText('Not enough data', 10, 20);
+    return;
+  }
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const pad = 10;
+  const xStep = (w - pad*2) / Math.max(1, (vals.length - 1));
+  function y(v){ return pad + (h - pad*2) * (1 - (v - min) / Math.max(1e-9, (max - min))); }
 
-      ctx.beginPath();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#22c55e';
-      vals.forEach((v,i) => {
-        const x = pad + i * xStep;
-        const yy = y(v);
-        if (i === 0) ctx.moveTo(x, yy);
-        else ctx.lineTo(x, yy);
-      });
-      ctx.stroke();
-    }
+  ctx.beginPath();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#22c55e';
+  vals.forEach((v,i) => {
+    const x = pad + i * xStep;
+    const yy = y(v);
+    if (i === 0) ctx.moveTo(x, yy);
+    else ctx.lineTo(x, yy);
+  });
+  ctx.stroke();
+}
 
-    async function tick() {
-      try {
-        const d = await fetchData();
-        if (!d) return;
-        setStatus(d.status, d.now_utc);
-        renderTrades(d.trades || []);
-        renderEquity(d.equity || []);
-      } catch (e) {
-        console.error(e);
-      }
-    }
+/* ===== Data fetchers (unified APIs) ===== */
+async function fetchStatus() {
+  const r = await fetch('/api/status', { cache: 'no-store' });
+  if (!r.ok) throw new Error('status HTTP ' + r.status);
+  return r.json(); // {status, source, age_sec, last_update}
+}
 
-    tick();
-    setInterval(tick, 10000);
-  </script>
+async function fetchData() {
+  const r = await fetch('/api/data', { cache: 'no-store' });
+  if (!r.ok) throw new Error('data HTTP ' + r.status);
+  return r.json(); // {status,last_update,age_sec,source,now_utc,equity,trades}
+}
+
+/* ===== Tick loop ===== */
+async function tick() {
+  try {
+    const [st, data] = await Promise.all([fetchStatus(), fetchData()]);
+    setStatusBadge(st.status, st.source, st.age_sec, st.last_update);
+    renderTrades(data.trades || []);
+    renderEquity(data.equity || []);
+  } catch (e) {
+    console.error('tick error:', e);
+    // הורד סטטוס כדי לסמן תקלה רגעית ב-UI
+    setStatusBadge('STOPPED', 'error', null, '—');
+  }
+}
+
+tick();
+setInterval(tick, 10000); // רענון כל 10 שניות
+</script>
 </body>
 </html>
