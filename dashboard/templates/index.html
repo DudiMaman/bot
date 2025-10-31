@@ -30,19 +30,26 @@
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <div class="title">Trading Bot — Dashboard</div>
-      <div class="sub">
-        Status indicator, last refresh timestamp (UTC), trades table & equity chart
-      </div>
-    </div>
-    <div style="display:flex; align-items:center; gap:12px;">
-      <div id="statusBadge" class="badge err">STOPPED</div>
-      <div class="pill">Last refresh (UTC): <span id="lastRefresh">—</span></div>
-      <a class="btn" href="/export/trades.csv">Export CSV</a>
-    </div>
-  </header>
+<header>
+  <div>
+    <div class="title">Trading Bot — Dashboard</div>
+    <div class="sub">Status indicator, last refresh timestamp (UTC), trades table & equity chart</div>
+  </div>
+
+  <div style="display:flex; align-items:center; gap:12px;">
+    <!-- Badge סטטוס מאוחד: מקבל RUNNING/STOPPED + מקור (db/csv) -->
+    <span id="status-badge" class="badge err" aria-live="polite" title="Unified status from /api/status">
+      Loading…
+    </span>
+
+    <!-- עדכון טיימסטמפּ אחרון -->
+    <div class="pill">Last refresh (UTC): <span id="lastRefresh">—</span></div>
+
+    <!-- ייצוא -->
+    <a class="btn" href="/export/trades.csv">Export CSV</a>
+  </div>
+</header>
+
 
   <div class="wrap">
     <div class="left">
