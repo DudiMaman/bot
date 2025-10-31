@@ -2,8 +2,9 @@
 import os
 import io
 import csv
-from datetime import datetime, timezone
-from flask import Flask, render_template, jsonify, send_file, abort
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal
+from flask import Flask, render_template, jsonify, send_file, abort, request
 
 # ===== הגדרות כלליות =====
 APP_TZ = timezone.utc  # מציגים הכל ב-UTC בדשבורד כברירת מחדל
@@ -18,6 +19,80 @@ EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
+# ===== עזרי DB (psycopg v3) — לא מחייב, עובד רק אם מוגדר DATABASE_URL =====
+_PSYCOPG_OK = False
+try:
+    import psycopg as _psycopg
+    from psycopg.rows import dict_row as _dict_row
+    _PSYCOPG_OK = True
+except Exception:
+    _PSYCOPG_OK = False
+
+def _db_available() -> bool:
+    return _PSYCOPG_OK and bool(os.getenv("DATABASE_URL"))
+
+def _get_conn():
+    if not _db_available():
+        raise RuntimeError("DATABASE_URL missing or psycopg not installed")
+    return _psycopg.connect(os.getenv("DATABASE_URL"))
+
+def _to_primitive(v):
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+def _rows_to_list(rows):
+    return [{k: _to_primitive(v) for k, v in r.items()} for r in rows]
+
+def db_last_equity(limit: int = 1):
+    """קריאה מהטבלה equity_curve (אם זמינה)"""
+    with _get_conn() as conn, conn.cursor(row_factory=_dict_row) as cur:
+        cur.execute('SELECT time, equity FROM "equity_curve" ORDER BY "time" DESC LIMIT %s;', (limit,))
+        return cur.fetchall()
+
+def db_last_trades(limit: int = 50):
+    """קריאה מהטבלה trades (אם זמינה)"""
+    with _get_conn() as conn, conn.cursor(row_factory=_dict_row) as cur:
+        cur.execute('SELECT * FROM "trades" ORDER BY "time" DESC LIMIT %s;', (limit,))
+        return cur.fetchall()
+
+def current_status_db(quiet_sec: int | None = None):
+    """סטטוס מה-DB לפי עדכון אחרון ב-equity/trades. ברירת מחדל: חלון שקט 900 שניות."""
+    if not _db_available():
+        return {"status": "STOPPED", "last_update": None, "age_sec": None, "source": "db"}
+    if quiet_sec is None:
+        quiet_sec = int((os.getenv("DASH_QUIET_SEC") or "900").strip())
+    now_utc = datetime.now(timezone.utc)
+
+    last_ts = None
+    try:
+        eq = db_last_equity(limit=1)
+        if eq:
+            t = eq[0]["time"]
+            if last_ts is None or t > last_ts:
+                last_ts = t
+    except Exception:
+        pass
+
+    try:
+        tr = db_last_trades(limit=1)
+        if tr:
+            t = tr[0]["time"]
+            if last_ts is None or t > last_ts:
+                last_ts = t
+    except Exception:
+        pass
+
+    if not last_ts:
+        return {"status": "STOPPED", "last_update": None, "age_sec": None, "source": "db"}
+
+    age = (now_utc - last_ts).total_seconds()
+    return {
+        "status": "RUNNING" if age <= quiet_sec else "STOPPED",
+        "last_update": last_ts.astimezone(timezone.utc).isoformat(),
+        "age_sec": int(age),
+        "source": "db",
+    }
 
 # ===== יצירת תיקיות/קבצים חסרים אוטומטית =====
 def _ensure_logs_and_headers():
@@ -32,7 +107,6 @@ def _ensure_logs_and_headers():
             csv.writer(f).writerow(["time", "equity"])
 
 _ensure_logs_and_headers()
-
 
 # ===== עזרי קבצים =====
 def _read_csv(path, limit=None):
@@ -55,7 +129,6 @@ def _read_csv(path, limit=None):
             limit = None
     return rows[-limit:] if limit else rows
 
-
 def _parse_iso(ts: str):
     if not ts or not isinstance(ts, str):
         return None
@@ -72,7 +145,6 @@ def _parse_iso(ts: str):
                 continue
     return None
 
-
 def _last_timestamp(row: dict):
     if not isinstance(row, dict):
         return None
@@ -81,8 +153,7 @@ def _last_timestamp(row: dict):
             return _parse_iso(row[key])
     return None
 
-
-# ===== לוגיקת סטטוס =====
+# ===== לוגיקת סטטוס (CSV) =====
 def _bot_status():
     eq_last = _read_csv(EQUITY_CSV, limit=1)
     now = datetime.now(APP_TZ)
@@ -97,7 +168,6 @@ def _bot_status():
     status = "RUNNING" if age <= 90 else "STOPPED"
     return {"status": status, "last_equity_ts": last_ts.isoformat(), "age_sec": int(age)}
 
-
 # ===== בחירת תבנית דשבורד =====
 def _pick_dashboard_template():
     templates_dir = os.path.join(BASE_DIR, "templates")
@@ -107,8 +177,7 @@ def _pick_dashboard_template():
         return "dashboard.html"
     return None
 
-
-# ===== ראוטים =====
+# ===== ראוטים (קיימים) =====
 @app.route("/")
 def index():
     tmpl = _pick_dashboard_template()
@@ -117,14 +186,14 @@ def index():
     st = _bot_status()
     return (
         f"<h1>Trading Dashboard</h1>"
-        f"<p>Status: <b>{st['status']}</b></p>"
-        f"<p>Last equity timestamp: {st['last_equity_ts']}</p>"
-        f"<p>Age (sec): {st['age_sec']}</p>"
-        f"<p>LOG_DIR: {LOG_DIR}</p>",
+        f"<p>Status (CSV): <b>{st['status']}</b></p>"
+        f"<p>Last equity timestamp (CSV): {st['last_equity_ts']}</p>"
+        f"<p>Age (sec, CSV): {st['age_sec']}</p>"
+        f"<p>LOG_DIR: {LOG_DIR}</p>"
+        f"<p>DB status endpoint: <code>/api/status_db</code></p>",
         200,
         {"Content-Type": "text/html; charset=utf-8"},
     )
-
 
 @app.route("/data")
 def data():
@@ -142,7 +211,6 @@ def data():
         }
     )
 
-
 @app.route("/export/trades.csv")
 def export_trades():
     if not os.path.exists(TRADES_CSV):
@@ -159,7 +227,6 @@ def export_trades():
         )
     return send_file(TRADES_CSV, mimetype="text/csv", as_attachment=True, download_name="trades.csv")
 
-
 @app.route("/export/equity_curve.csv")
 def export_equity():
     if not os.path.exists(EQUITY_CSV):
@@ -174,13 +241,11 @@ def export_equity():
         )
     return send_file(EQUITY_CSV, mimetype="text/csv", as_attachment=True, download_name="equity_curve.csv")
 
-
 @app.route("/download")
 def download_csv_alias():
     if os.path.exists(TRADES_CSV):
         return send_file(TRADES_CSV, as_attachment=True, download_name="trades.csv")
     abort(404, description="trades.csv not found")
-
 
 @app.route("/health")
 def health():
@@ -197,6 +262,32 @@ def health():
         }
     ), 200
 
+# ===== ראוטים חדשים – DB =====
+@app.route("/api/status_db")
+def api_status_db():
+    return jsonify(current_status_db())
+
+@app.route("/api/equity_db")
+def api_equity_db():
+    if not _db_available():
+        return jsonify({"error": "DB not available"}), 503
+    try:
+        limit = int(request.args.get("limit", "200"))
+    except Exception:
+        limit = 200
+    rows = _rows_to_list(db_last_equity(limit=limit)[::-1])  # chronological asc לגרפים
+    return jsonify(rows)
+
+@app.route("/api/trades_db")
+def api_trades_db():
+    if not _db_available():
+        return jsonify({"error": "DB not available"}), 503
+    try:
+        limit = int(request.args.get("limit", "100"))
+    except Exception:
+        limit = 100
+    rows = _rows_to_list(db_last_trades(limit=limit))
+    return jsonify(rows)
 
 # ===== DEBUG (מאובטח ב־ENV) =====
 def _debug_enabled():
@@ -228,7 +319,6 @@ def debug_pulse():
     with open(EQUITY_CSV, "a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow([now, "100000"])
     return jsonify({"ok": True, "now_utc": now}), 200
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
