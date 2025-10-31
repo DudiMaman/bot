@@ -321,6 +321,54 @@ def api_status_unified():
     # נפילה חכמה ל-CSV (קיים כבר)
     return jsonify(_status_csv_only())
 
+# ===== Unified data endpoint (prefers DB, falls back to CSV) =====
+@app.route("/api/data")
+def api_data_unified():
+    # סטטוס מאוחד מה-DB אם אפשר
+    st = None
+    if _db_available():
+        try:
+            st = current_status_db()
+        except Exception:
+            st = None
+
+    if st is not None:
+        # מקור: DB
+        try:
+            eq_limit = int(request.args.get("eq_limit", "300"))
+            tr_limit = int(request.args.get("tr_limit", "200"))
+        except Exception:
+            eq_limit, tr_limit = 300, 200
+        try:
+            eq = _rows_to_list(db_last_equity(limit=eq_limit))[::-1]  # כרונולוגי עולה לגרף
+            tr = _rows_to_list(db_last_trades(limit=tr_limit))        # חדש → ישן לטבלה
+            return jsonify({
+                "status": st.get("status"),
+                "last_update": st.get("last_update"),
+                "age_sec": st.get("age_sec"),
+                "source": st.get("source", "db"),
+                "now_utc": datetime.now(APP_TZ).isoformat(),
+                "equity": eq,
+                "trades": tr,
+            })
+        except Exception:
+            # נפילה לקריאת CSV אם DB נכשל
+            pass
+
+    # מקור: CSV (fallback)
+    s = _bot_status()
+    eq = _read_csv(EQUITY_CSV)
+    tr = _read_csv(TRADES_CSV)
+    return jsonify({
+        "status": s["status"],
+        "last_update": s["last_equity_ts"],
+        "age_sec": s["age_sec"],
+        "source": "csv",
+        "now_utc": datetime.now(APP_TZ).isoformat(),
+        "equity": eq,
+        "trades": tr,
+    })
+
 # ===== DEBUG (מאובטח ב־ENV) =====
 def _debug_enabled():
     return os.getenv("ENABLE_DEBUG", "0") == "1"
