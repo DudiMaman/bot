@@ -1,98 +1,171 @@
+<!-- dashboard/templates/index.html -->
 <!doctype html>
-<html lang="en" data-bs-theme="light">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Trading Bot Dashboard</title>
-    <!-- Tabler CSS (CDN) -->
-    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css" rel="stylesheet"/>
-    <style>
-      body { background-color: var(--tblr-bg-surface); }
-      .chip {
-        padding: .25rem .6rem; border-radius: 999px; font-weight: 600; font-size: .85rem;
-      }
-      .chip-running { background: #d1fae5; color: #065f46; }
-      .chip-stopped { background: #fee2e2; color: #7f1d1d; }
-      .grid-70-30 { display: grid; grid-template-columns: 70% 30%; gap: 1rem; }
-      .table thead th { position: sticky; top: 0; background: var(--tblr-bg-surface); z-index: 1; }
-      .scroll-card { max-height: 70vh; overflow: auto; }
-      .muted { color: var(--tblr-muted); }
-      .toolbar{ display:flex; gap:.5rem; flex-wrap:wrap; align-items:center}
-      .toolbar .spacer{ flex:1 }
-      .small { font-size: .875rem; }
-      .last-updated { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
-      @media (max-width: 992px) { .grid-70-30 { grid-template-columns: 1fr; } }
-    </style>
-  </head>
-  <body>
-    <div class="page">
-      <header class="navbar navbar-expand-md navbar-light sticky-top" style="background:var(--tblr-bg-surface); border-bottom:1px solid var(--tblr-border-color);">
-        <div class="container-xl">
-          <h1 class="navbar-brand">
-            <span class="navbar-brand-text">Trading Bot — Control & Monitor</span>
-          </h1>
-          <div class="toolbar">
-            <div class="chip" id="statusChip">—</div>
-            <span class="muted small last-updated" id="lastUpdated">Last updated: —</span>
-            <span class="spacer"></span>
-            <button id="btnResume" class="btn btn-success btn-sm">Start</button>
-            <button id="btnPause" class="btn btn-outline-danger btn-sm">Stop</button>
-            <button id="btnTheme" class="btn btn-outline-secondary btn-sm" title="Toggle theme">Theme</button>
-          </div>
-        </div>
-      </header>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Trading Bot Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <style>
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial; margin:0; background:#0f172a; color:#e5e7eb; }
+    header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid #1f2937; }
+    .title { font-weight:700; letter-spacing:.3px; }
+    .sub { font-size:12px; opacity:.8; }
+    .badge { padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600; display:inline-flex; align-items:center; gap:8px; }
+    .ok { background:rgba(34,197,94,.12); color:#22c55e; border:1px solid rgba(34,197,94,.3); }
+    .err { background:rgba(239,68,68,.12); color:#ef4444; border:1px solid rgba(239,68,68,.3); }
+    .wrap { display:flex; gap:16px; padding:16px; }
+    .left { width:70%; }
+    .right { width:30%; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:14px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { padding:8px 10px; border-bottom:1px dashed #1f2937; }
+    th { text-align:left; color:#9ca3af; font-weight:600; }
+    .footer { display:flex; gap:12px; align-items:center; }
+    .pill { padding:4px 8px; border-radius:999px; background:#0b1220; border:1px solid #1f2937; font-size:12px; color:#9ca3af;}
+    .btn { padding:8px 12px; border-radius:10px; font-weight:600; border:1px solid #1f2937; background:#0b1220; color:#e5e7eb; cursor:pointer;}
+    .btn:hover { background:#0f1627; }
+    .muted { color:#9ca3af; font-size:12px; }
+    canvas { width:100%; height:320px; background:#0b1220; border:1px solid #1f2937; border-radius:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="title">Trading Bot — Dashboard</div>
+      <div class="sub">
+        Status indicator, last refresh timestamp (UTC), trades table & equity chart
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div id="statusBadge" class="badge err">STOPPED</div>
+      <div class="pill">Last refresh (UTC): <span id="lastRefresh">—</span></div>
+      <a class="btn" href="/export/trades.csv">Export CSV</a>
+    </div>
+  </header>
 
-      <main class="page-body">
-        <div class="container-xl my-3">
-          <div class="grid-70-30">
-            <!-- LEFT: Trades Table (70%) -->
-            <div>
-              <div class="card scroll-card">
-                <div class="card-header">
-                  <h3 class="card-title">Recent Trades</h3>
-                </div>
-                <div class="table-responsive">
-                  <table class="table table-hover">
-                    <thead>
-                      <tr>
-                        <th style="min-width:160px;">Time (UTC)</th>
-                        <th>Conn.</th>
-                        <th>Symbol</th>
-                        <th>Type</th>
-                        <th>Side</th>
-                        <th class="text-end">Price</th>
-                        <th class="text-end">Qty</th>
-                        <th class="text-end">PnL</th>
-                        <th class="text-end">Equity</th>
-                      </tr>
-                    </thead>
-                    <tbody id="tradesBody">
-                      <!-- filled by JS -->
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            <!-- RIGHT: Equity Chart (30%) -->
-            <div>
-              <div class="card" style="height:70vh;">
-                <div class="card-header">
-                  <h3 class="card-title">Equity Curve</h3>
-                </div>
-                <div class="card-body">
-                  <canvas id="equityChart" style="height: 60vh; width: 100%;"></canvas>
-                </div>
-              </div>
-            </div>
-          </div>
+  <div class="wrap">
+    <div class="left">
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <div class="title" style="font-size:14px;">Trades</div>
+          <div class="muted" id="tradesMeta">—</div>
         </div>
-      </main>
+        <div style="overflow:auto; max-height:65vh;">
+          <table id="tradesTable">
+            <thead>
+              <tr>
+                <th>Time (UTC)</th><th>Connector</th><th>Symbol</th><th>Type</th>
+                <th>Side</th><th>Price</th><th>Qty</th><th>PnL</th><th>Equity</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
-    <!-- Dependencies -->
-    <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="/static/app.js"></script>
-  </body>
+    <div class="right">
+      <div class="card" style="margin-bottom:16px;">
+        <div class="title" style="font-size:14px; margin-bottom:8px;">Equity</div>
+        <canvas id="eqChart"></canvas>
+        <div class="footer" style="margin-top:8px;">
+          <span class="muted">Auto refresh every 10s</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchData() {
+      const res = await fetch('/data', {cache:'no-store'});
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    function fmt(x, d=2) {
+      if (x === "" || x === null || x === undefined) return "";
+      const n = Number(x);
+      return isFinite(n) ? n.toFixed(d) : x;
+    }
+
+    function setStatus(status, lastTs) {
+      const el = document.getElementById('statusBadge');
+      el.textContent = status;
+      el.className = 'badge ' + (status === 'RUNNING' ? 'ok' : 'err');
+      document.getElementById('lastRefresh').textContent = lastTs || '—';
+    }
+
+    function renderTrades(list) {
+      const tb = document.querySelector('#tradesTable tbody');
+      tb.innerHTML = '';
+      for (const r of list.slice(-500).reverse()) { // מציג 500 אחרונים
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${r.time ?? ''}</td>
+          <td>${r.connector ?? ''}</td>
+          <td>${r.symbol ?? ''}</td>
+          <td>${r.type ?? ''}</td>
+          <td>${r.side ?? ''}</td>
+          <td>${fmt(r.price, 6)}</td>
+          <td>${fmt(r.qty, 6)}</td>
+          <td>${fmt(r.pnl, 2)}</td>
+          <td>${fmt(r.equity, 2)}</td>
+        `;
+        tb.appendChild(tr);
+      }
+      document.getElementById('tradesMeta').textContent =
+        `${list.length} trades total (${Math.min(500, list.length)} shown)`;
+    }
+
+    // Equity “poor man chart”
+    function renderEquity(eq) {
+      const canvas = document.getElementById('eqChart');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      const scale = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(w * scale);
+      canvas.height = Math.floor(h * scale);
+      ctx.scale(scale, scale);
+      ctx.clearRect(0, 0, w, h);
+
+      const vals = eq.map(e => Number(e.equity)).filter(v => isFinite(v));
+      if (vals.length < 2) {
+        ctx.fillStyle = '#9ca3af';
+        ctx.fillText('Not enough data', 10, 20);
+        return;
+      }
+      const min = Math.min(...vals), max = Math.max(...vals);
+      const pad = 10;
+      const xStep = (w - pad*2) / (vals.length - 1);
+      function y(v){ return pad + (h - pad*2) * (1 - (v - min) / Math.max(1e-9, (max - min))); }
+
+      ctx.beginPath();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#22c55e';
+      vals.forEach((v,i) => {
+        const x = pad + i * xStep;
+        const yy = y(v);
+        if (i === 0) ctx.moveTo(x, yy);
+        else ctx.lineTo(x, yy);
+      });
+      ctx.stroke();
+    }
+
+    async function tick() {
+      try {
+        const d = await fetchData();
+        if (!d) return;
+        setStatus(d.status, d.now_utc);
+        renderTrades(d.trades || []);
+        renderEquity(d.equity || []);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    tick();
+    setInterval(tick, 10000);
+  </script>
+</body>
 </html>
