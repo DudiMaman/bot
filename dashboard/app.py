@@ -2,12 +2,12 @@
 import os
 import io
 import csv
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+import json
+from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template, jsonify, send_file, abort, request
 
 # ===== הגדרות כלליות =====
-APP_TZ = timezone.utc  # מציגים הכל ב-UTC בדשבורד כברירת מחדל
+APP_TZ = timezone.utc  # השרת עובד ב-UTC; ההמרה לישראל תיעשה בצד-לקוח בשלב 2
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # נתיב לוגים של הבוט (ניתן לשנות עם ENV בשם LOG_DIR)
@@ -16,83 +16,10 @@ LOG_DIR = os.getenv("LOG_DIR", DEFAULT_LOG_DIR)
 
 TRADES_CSV = os.path.join(LOG_DIR, "trades.csv")
 EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
+STATE_JSON = os.path.join(LOG_DIR, "bot_state.json")   # לא מפיל תהליך; רק חיווי/override לדאשבורד
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
-# ===== עזרי DB (psycopg v3) — לא מחייב, עובד רק אם מוגדר DATABASE_URL =====
-_PSYCOPG_OK = False
-try:
-    import psycopg as _psycopg
-    from psycopg.rows import dict_row as _dict_row
-    _PSYCOPG_OK = True
-except Exception:
-    _PSYCOPG_OK = False
-
-def _db_available() -> bool:
-    return _PSYCOPG_OK and bool(os.getenv("DATABASE_URL"))
-
-def _get_conn():
-    if not _db_available():
-        raise RuntimeError("DATABASE_URL missing or psycopg not installed")
-    return _psycopg.connect(os.getenv("DATABASE_URL"))
-
-def _to_primitive(v):
-    if isinstance(v, Decimal):
-        return float(v)
-    return v
-
-def _rows_to_list(rows):
-    return [{k: _to_primitive(v) for k, v in r.items()} for r in rows]
-
-def db_last_equity(limit: int = 1):
-    """קריאה מהטבלה equity_curve (אם זמינה)"""
-    with _get_conn() as conn, conn.cursor(row_factory=_dict_row) as cur:
-        cur.execute('SELECT time, equity FROM "equity_curve" ORDER BY "time" DESC LIMIT %s;', (limit,))
-        return cur.fetchall()
-
-def db_last_trades(limit: int = 50):
-    """קריאה מהטבלה trades (אם זמינה)"""
-    with _get_conn() as conn, conn.cursor(row_factory=_dict_row) as cur:
-        cur.execute('SELECT * FROM "trades" ORDER BY "time" DESC LIMIT %s;', (limit,))
-        return cur.fetchall()
-
-def current_status_db(quiet_sec: int | None = None):
-    """סטטוס מה-DB לפי עדכון אחרון ב-equity/trades. ברירת מחדל: חלון שקט 900 שניות."""
-    if not _db_available():
-        return {"status": "STOPPED", "last_update": None, "age_sec": None, "source": "db"}
-    if quiet_sec is None:
-        quiet_sec = int((os.getenv("DASH_QUIET_SEC") or "900").strip())
-    now_utc = datetime.now(timezone.utc)
-
-    last_ts = None
-    try:
-        eq = db_last_equity(limit=1)
-        if eq:
-            t = eq[0]["time"]
-            if last_ts is None or t > last_ts:
-                last_ts = t
-    except Exception:
-        pass
-
-    try:
-        tr = db_last_trades(limit=1)
-        if tr:
-            t = tr[0]["time"]
-            if last_ts is None or t > last_ts:
-                last_ts = t
-    except Exception:
-        pass
-
-    if not last_ts:
-        return {"status": "STOPPED", "last_update": None, "age_sec": None, "source": "db"}
-
-    age = (now_utc - last_ts).total_seconds()
-    return {
-        "status": "RUNNING" if age <= quiet_sec else "STOPPED",
-        "last_update": last_ts.astimezone(timezone.utc).isoformat(),
-        "age_sec": int(age),
-        "source": "db",
-    }
 
 # ===== יצירת תיקיות/קבצים חסרים אוטומטית =====
 def _ensure_logs_and_headers():
@@ -105,11 +32,31 @@ def _ensure_logs_and_headers():
     if not os.path.exists(EQUITY_CSV):
         with open(EQUITY_CSV, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(["time", "equity"])
+    if not os.path.exists(STATE_JSON):
+        _write_state({"manual_status": None, "updated_at": None})  # None = אין override
 
 _ensure_logs_and_headers()
 
+
+# ===== אחסון סטטוס ידני (Play/Pause עדין) =====
+def _read_state():
+    try:
+        with open(STATE_JSON, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"manual_status": None, "updated_at": None}
+
+def _write_state(obj):
+    try:
+        with open(STATE_JSON, "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+    except Exception:
+        pass
+
+
 # ===== עזרי קבצים =====
 def _read_csv(path, limit=None):
+    """קורא CSV כ-list[dict]. אם limit סופק, יחזיר רק את הסוף. חסין לשגיאות קלות."""
     rows = []
     if not os.path.exists(path):
         return rows
@@ -129,7 +76,9 @@ def _read_csv(path, limit=None):
             limit = None
     return rows[-limit:] if limit else rows
 
+
 def _parse_iso(ts: str):
+    """ממיר טקסט לזמן. תומך ב־Z, +00:00, וגם בלי אזור."""
     if not ts or not isinstance(ts, str):
         return None
     ts = ts.strip()
@@ -145,7 +94,9 @@ def _parse_iso(ts: str):
                 continue
     return None
 
+
 def _last_timestamp(row: dict):
+    """מחלץ timestamp מתוך שורה לפי שמות מקובלים."""
     if not isinstance(row, dict):
         return None
     for key in ("time", "timestamp", "ts", "datetime"):
@@ -153,20 +104,89 @@ def _last_timestamp(row: dict):
             return _parse_iso(row[key])
     return None
 
-# ===== לוגיקת סטטוס (CSV) =====
+
+# ===== עזרי טווחי זמן =====
+def _compute_range_from_query():
+    """
+    מחזיר (start_utc, end_utc, label) ע"פ פרמטרי שאילתה:
+      - range: last_1h | last_24h | last_7d | last_30d | last_90d
+      - from, to: ערכי ISO-8601 (UTC או עם offset)
+    אם לא סופק דבר -> (None, None, "all")
+    """
+    now = datetime.now(APP_TZ)
+    rng = (request.args.get("range") or "").lower().strip()
+    p_from = request.args.get("from")
+    p_to = request.args.get("to")
+
+    if p_from or p_to:
+        start = _parse_iso(p_from) if p_from else None
+        end = _parse_iso(p_to) if p_to else None
+        return start, end, "custom"
+
+    if rng in {"last_1h", "1h"}:
+        return now - timedelta(hours=1), now, "last_1h"
+    if rng in {"last_24h", "24h", "1d"}:
+        return now - timedelta(days=1), now, "last_24h"
+    if rng in {"last_7d", "7d"}:
+        return now - timedelta(days=7), now, "last_7d"
+    if rng in {"last_30d", "30d"}:
+        return now - timedelta(days=30), now, "last_30d"
+    if rng in {"last_90d", "90d"}:
+        return now - timedelta(days=90), now, "last_90d"
+
+    return None, None, "all"
+
+
+def _within_range(ts: datetime, start: datetime | None, end: datetime | None):
+    if ts is None:
+        return False if (start or end) else True
+    if start and ts < start:
+        return False
+    if end and ts > end:
+        return False
+    return True
+
+
+def _filter_rows_by_time(rows, start, end):
+    out = []
+    for r in rows:
+        ts = _last_timestamp(r)
+        if _within_range(ts, start, end):
+            out.append(r)
+    return out
+
+
+# ===== לוגיקת סטטוס =====
 def _bot_status():
+    """
+    RUNNING/STOPPED לפי heartbeat ב-equity_curve.csv אלא אם יש override ידני.
+    """
+    state = _read_state()
+    if state.get("manual_status") in {"RUNNING", "STOPPED"}:
+        # override ידני
+        return {
+            "status": state["manual_status"],
+            "last_equity_ts": None,
+            "age_sec": None,
+            "manual_override": True,
+        }
+
     eq_last = _read_csv(EQUITY_CSV, limit=1)
     now = datetime.now(APP_TZ)
     if not eq_last:
-        return {"status": "STOPPED", "last_equity_ts": None, "age_sec": None}
+        return {"status": "STOPPED", "last_equity_ts": None, "age_sec": None, "manual_override": False}
+
     last_ts = _last_timestamp(eq_last[-1])
     if not last_ts:
-        return {"status": "STOPPED", "last_equity_ts": None, "age_sec": None}
+        return {"status": "STOPPED", "last_equity_ts": None, "age_sec": None, "manual_override": False}
+
     if last_ts.tzinfo is None:
         last_ts = last_ts.replace(tzinfo=APP_TZ)
+
     age = (now - last_ts).total_seconds()
     status = "RUNNING" if age <= 90 else "STOPPED"
-    return {"status": status, "last_equity_ts": last_ts.isoformat(), "age_sec": int(age)}
+    return {"status": status, "last_equity_ts": last_ts.isoformat(), "age_sec": int(age), "manual_override": False}
+
 
 # ===== בחירת תבנית דשבורד =====
 def _pick_dashboard_template():
@@ -177,86 +197,117 @@ def _pick_dashboard_template():
         return "dashboard.html"
     return None
 
-# ===== ראוטים (קיימים) =====
+
+# ===== ראוטים =====
 @app.route("/")
 def index():
     tmpl = _pick_dashboard_template()
-    # סטטוס מאוחד: DB אם זמין; אחרת CSV
-    if _db_available():
-        try:
-            uni = current_status_db()
-        except Exception:
-            s = _bot_status()
-            uni = {"status": s["status"], "last_update": s["last_equity_ts"], "age_sec": s["age_sec"], "source": "csv"}
-    else:
-        s = _bot_status()
-        uni = {"status": s["status"], "last_update": s["last_equity_ts"], "age_sec": s["age_sec"], "source": "csv"}
-
     if tmpl:
-        return render_template(tmpl, unified_status=uni)
-
+        return render_template(tmpl)
+    st = _bot_status()
     return (
-        f"<h1>Trading Dashboard</h1>"
-        f"<p>Status: <b>{uni['status']}</b> <small>(source: {uni['source']})</small></p>"
-        f"<p>Last update: {uni['last_update']}</p>"
-        f"<p>Age (sec): {uni['age_sec']}</p>"
-        f"<p>LOG_DIR: {LOG_DIR}</p>"
-        f"<p>Unified status API: <code>/api/status</code></p>",
+        f"<h1>Trading Bot Dashboard</h1>"
+        f"<p>Status: <b>{st['status']}</b></p>"
+        f"<p>Last equity timestamp: {st['last_equity_ts']}</p>"
+        f"<p>Age (sec): {st['age_sec']}</p>"
+        f"<p>LOG_DIR: {LOG_DIR}</p>",
         200,
         {"Content-Type": "text/html; charset=utf-8"},
     )
 
+
 @app.route("/data")
 def data():
-    trades = _read_csv(TRADES_CSV)
-    equity = _read_csv(EQUITY_CSV)
+    """
+    מחזיר JSON עם נתוני trades & equity *מסוננים לפי טווח*.
+    פרמטרים (query):
+      - range: last_1h | last_24h | last_7d | last_30d | last_90d
+      - from, to: ISO-8601 (UTC/offset)
+    """
+    start, end, label = _compute_range_from_query()
+    trades_all = _read_csv(TRADES_CSV)
+    equity_all = _read_csv(EQUITY_CSV)
+    trades = _filter_rows_by_time(trades_all, start, end)
+    equity = _filter_rows_by_time(equity_all, start, end)
     st = _bot_status()
+
+    # פורמט "פשוט" לרענון עבור ה-UI (לפי בקשתך בשלב 7)
+    now_iso_simple = datetime.now(APP_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
     return jsonify(
         {
             "status": st["status"],
+            "manual_override": st.get("manual_override", False),
             "last_equity_ts": st["last_equity_ts"],
             "age_sec": st["age_sec"],
             "now_utc": datetime.now(APP_TZ).isoformat(),
+            "now_utc_simple": now_iso_simple,
+            "range": {"label": label, "from": start.isoformat() if start else None, "to": end.isoformat() if end else None},
             "trades": trades,
             "equity": equity,
         }
     )
 
+
 @app.route("/export/trades.csv")
 def export_trades():
-    if not os.path.exists(TRADES_CSV):
+    """
+    הורדה של trades.csv מסונן לפי פרמטרים כמו ב-/data
+    """
+    start, end, _ = _compute_range_from_query()
+    rows = _filter_rows_by_time(_read_csv(TRADES_CSV), start, end)
+
+    # כותבים CSV זמני לזיכרון מתוך הרשומות המסוננות
+    if not rows:
+        # נחזיר רק כותרות סטנדרטיות
         output = io.StringIO()
-        csv.writer(output).writerow(
-            ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"]
-        )
+        csv.writer(output).writerow(["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"])
         output.seek(0)
-        return send_file(
-            io.BytesIO(output.getvalue().encode("utf-8")),
-            mimetype="text/csv",
-            as_attachment=True,
-            download_name="trades.csv",
-        )
-    return send_file(TRADES_CSV, mimetype="text/csv", as_attachment=True, download_name="trades.csv")
+        return send_file(io.BytesIO(output.getvalue().encode("utf-8")), mimetype="text/csv",
+                         as_attachment=True, download_name="trades.csv")
+
+    headers = list(rows[0].keys())
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=headers)
+    writer.writeheader()
+    writer.writerows(rows)
+    output.seek(0)
+    return send_file(io.BytesIO(output.getvalue().encode("utf-8")), mimetype="text/csv",
+                     as_attachment=True, download_name="trades.csv")
+
 
 @app.route("/export/equity_curve.csv")
 def export_equity():
-    if not os.path.exists(EQUITY_CSV):
+    """
+    הורדה של equity_curve.csv מסונן לפי פרמטרים כמו ב-/data
+    """
+    start, end, _ = _compute_range_from_query()
+    rows = _filter_rows_by_time(_read_csv(EQUITY_CSV), start, end)
+
+    if not rows:
         output = io.StringIO()
         csv.writer(output).writerow(["time", "equity"])
         output.seek(0)
-        return send_file(
-            io.BytesIO(output.getvalue().encode("utf-8")),
-            mimetype="text/csv",
-            as_attachment=True,
-            download_name="equity_curve.csv",
-        )
-    return send_file(EQUITY_CSV, mimetype="text/csv", as_attachment=True, download_name="equity_curve.csv")
+        return send_file(io.BytesIO(output.getvalue().encode("utf-8")), mimetype="text/csv",
+                         as_attachment=True, download_name="equity_curve.csv")
+
+    headers = list(rows[0].keys())
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=headers)
+    writer.writeheader()
+    writer.writerows(rows)
+    output.seek(0)
+    return send_file(io.BytesIO(output.getvalue().encode("utf-8")), mimetype="text/csv",
+                     as_attachment=True, download_name="equity_curve.csv")
+
 
 @app.route("/download")
 def download_csv_alias():
+    """אליאס תואם-עבר לעדכון ישנים — מוריד trades.csv אם קיים (ללא סינון)."""
     if os.path.exists(TRADES_CSV):
         return send_file(TRADES_CSV, as_attachment=True, download_name="trades.csv")
     abort(404, description="trades.csv not found")
+
 
 @app.route("/health")
 def health():
@@ -267,139 +318,36 @@ def health():
             "has_trades_csv": os.path.exists(TRADES_CSV),
             "has_equity_csv": os.path.exists(EQUITY_CSV),
             "status": st["status"],
+            "manual_override": st.get("manual_override", False),
             "last_equity_ts": st["last_equity_ts"],
             "age_sec": st["age_sec"],
             "log_dir": LOG_DIR,
         }
     ), 200
 
-# ===== ראוטים חדשים – DB =====
-@app.route("/api/status_db")
-def api_status_db():
-    return jsonify(current_status_db())
 
-@app.route("/api/equity_db")
-def api_equity_db():
-    if not _db_available():
-        return jsonify({"error": "DB not available"}), 503
-    try:
-        limit = int(request.args.get("limit", "200"))
-    except Exception:
-        limit = 200
-    rows = _rows_to_list(db_last_equity(limit=limit)[::-1])  # chronological asc לגרפים
-    return jsonify(rows)
-
-@app.route("/api/trades_db")
-def api_trades_db():
-    if not _db_available():
-        return jsonify({"error": "DB not available"}), 503
-    try:
-        limit = int(request.args.get("limit", "100"))
-    except Exception:
-        limit = 100
-    rows = _rows_to_list(db_last_trades(limit=limit))
-    return jsonify(rows)
-
-# ===== Unified status endpoint (prefers DB, falls back to CSV) =====
-def _status_csv_only():
+# ===== APIs ל-Play/Pause עדין (לא מפיל תהליכים) =====
+@app.route("/api/bot/state", methods=["GET"])
+def bot_state_get():
+    state = _read_state()
     st = _bot_status()
-    return {
-        "status": st["status"],
-        "last_update": st["last_equity_ts"],
-        "age_sec": st["age_sec"],
-        "source": "csv",
-    }
+    return jsonify({"manual_status": state.get("manual_status"), "effective_status": st["status"],
+                    "updated_at": state.get("updated_at")})
 
-@app.route("/api/status")
-def api_status_unified():
-    # אם יש DB ו-psycopg — נעדיף אותו
-    if _db_available():
-        try:
-            return jsonify(current_status_db())
-        except Exception:
-            pass
-    # נפילה חכמה ל-CSV (קיים כבר)
-    return jsonify(_status_csv_only())
-
-# ===== Unified data endpoint (prefers DB, falls back to CSV) =====
-@app.route("/api/data")
-def api_data_unified():
-    # סטטוס מאוחד מה-DB אם אפשר
-    st = None
-    if _db_available():
-        try:
-            st = current_status_db()
-        except Exception:
-            st = None
-
-    if st is not None:
-        # מקור: DB
-        try:
-            eq_limit = int(request.args.get("eq_limit", "300"))
-            tr_limit = int(request.args.get("tr_limit", "200"))
-        except Exception:
-            eq_limit, tr_limit = 300, 200
-        try:
-            eq = _rows_to_list(db_last_equity(limit=eq_limit))[::-1]  # כרונולוגי עולה לגרף
-            tr = _rows_to_list(db_last_trades(limit=tr_limit))        # חדש → ישן לטבלה
-            return jsonify({
-                "status": st.get("status"),
-                "last_update": st.get("last_update"),
-                "age_sec": st.get("age_sec"),
-                "source": st.get("source", "db"),
-                "now_utc": datetime.now(APP_TZ).isoformat(),
-                "equity": eq,
-                "trades": tr,
-            })
-        except Exception:
-            # נפילה לקריאת CSV אם DB נכשל
-            pass
-
-    # מקור: CSV (fallback)
-    s = _bot_status()
-    eq = _read_csv(EQUITY_CSV)
-    tr = _read_csv(TRADES_CSV)
-    return jsonify({
-        "status": s["status"],
-        "last_update": s["last_equity_ts"],
-        "age_sec": s["age_sec"],
-        "source": "csv",
-        "now_utc": datetime.now(APP_TZ).isoformat(),
-        "equity": eq,
-        "trades": tr,
-    })
-
-# ===== DEBUG (מאובטח ב־ENV) =====
-def _debug_enabled():
-    return os.getenv("ENABLE_DEBUG", "0") == "1"
-
-@app.route("/debug/seed", methods=["POST", "GET"])
-def debug_seed():
-    if not _debug_enabled():
-        abort(404)
-    os.makedirs(LOG_DIR, exist_ok=True)
-    # seed trades
-    with open(TRADES_CSV, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"])
-        w.writerow(["2025-10-31T12:00:00Z", "Bybit", "BTCUSDT", "MARKET", "BUY", "68000", "0.01", "3.2", "100003.2"])
-    # seed equity
-    with open(EQUITY_CSV, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["time", "equity"])
-        w.writerow(["2025-10-31T12:00:05Z", "100000"])
-    return jsonify({"ok": True, "message": "seeded"}), 200
-
-@app.route("/debug/pulse", methods=["POST", "GET"])
-def debug_pulse():
-    if not _debug_enabled():
-        abort(404)
+@app.route("/api/bot/start", methods=["POST"])
+def bot_state_start():
     now = datetime.now(APP_TZ).isoformat()
-    # append equity heartbeat
-    with open(EQUITY_CSV, "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow([now, "100000"])
-    return jsonify({"ok": True, "now_utc": now}), 200
+    _write_state({"manual_status": "RUNNING", "updated_at": now})
+    return jsonify({"ok": True, "manual_status": "RUNNING", "updated_at": now})
+
+@app.route("/api/bot/pause", methods=["POST"])
+def bot_state_pause():
+    now = datetime.now(APP_TZ).isoformat()
+    _write_state({"manual_status": "STOPPED", "updated_at": now})
+    return jsonify({"ok": True, "manual_status": "STOPPED", "updated_at": now})
+
 
 if __name__ == "__main__":
+    # PORT לברירת־מחדל: 10000 (ניתן לשנות עם ENV בשם PORT)
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
