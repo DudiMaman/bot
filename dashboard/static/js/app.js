@@ -1,12 +1,29 @@
-// מציגים זמן ישראל (Asia/Jerusalem) בתצוגה בלבד, בלי לגעת בבקאנד/CSV
-const IL_TZ = 'Asia/Jerusalem';
+// app.js — תצוגת שעון מקומי גמישה בצד־לקוח בלבד
+const TIMEZONES = {
+  'Asia/Jerusalem': 'שעון ישראל',
+  'UTC': 'UTC',
+  'Etc/GMT': 'GMT',
+  'Etc/GMT-2': 'GMT+2',
+  'Etc/GMT-3': 'GMT+3'
+};
 
-function toILString(isoLike) {
+let currentTz = localStorage.getItem('tz') || 'Asia/Jerusalem';
+const tzSelect = document.getElementById('tz-select');
+
+for (const [tz, label] of Object.entries(TIMEZONES)) {
+  const opt = document.createElement('option');
+  opt.value = tz;
+  opt.textContent = label;
+  if (tz === currentTz) opt.selected = true;
+  tzSelect.appendChild(opt);
+}
+
+function toTzString(isoLike) {
   if (!isoLike) return '—';
   const d = new Date(isoLike);
   if (isNaN(d.getTime())) return String(isoLike);
   const fmt = new Intl.DateTimeFormat('he-IL', {
-    timeZone: IL_TZ,
+    timeZone: currentTz,
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false
@@ -35,7 +52,7 @@ function renderTrades(rows) {
   rows.forEach(r => {
     const tr = document.createElement('tr');
     const cells = [
-      toILString(getRowTime(r)),
+      toTzString(getRowTime(r)),
       r.symbol ?? '—',
       r.side ?? '—',
       r.type ?? '—',
@@ -78,7 +95,7 @@ async function loadData() {
   overrideEl.style.display = data.manual_override ? 'inline-block' : 'none';
 
   const serverNow = data.now_utc || data.now || data.server_time || new Date().toISOString();
-  lrIL.textContent  = toILString(serverNow);
+  lrIL.textContent  = toTzString(serverNow);
   try {
     const d = new Date(serverNow);
     lrUTC.textContent = isNaN(d.getTime()) ? String(serverNow) : d.toISOString().replace('T', ' ').replace('Z', '');
@@ -92,8 +109,13 @@ async function loadData() {
   renderTrades(data.trades || []);
 }
 
-function startAutoRefresh() {
+tzSelect.addEventListener('change', () => {
+  currentTz = tzSelect.value;
+  localStorage.setItem('tz', currentTz);
+  loadData().catch(console.error);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
   loadData().catch(console.error);
   setInterval(() => loadData().catch(console.error), 15000);
-}
-document.addEventListener('DOMContentLoaded', startAutoRefresh);
+});
