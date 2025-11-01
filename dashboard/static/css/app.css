@@ -1,0 +1,59 @@
+/* dashboard/static/css/app.css */
+:root {
+  --bg: #0f1117;
+  --fg: #e6e6e6;
+  --muted: #a0a4ad;
+  --ok: #2ecc71;
+  --stop: #e74c3c;
+  --card: #161a22;
+  --accent: #3aa0ff;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: system-ui, Arial, sans-serif; }
+
+.wrap { width: min(1100px, 96%); margin: 0 auto; }
+
+header.wrap {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 0;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand .logo { font-size: 28px; }
+h1 { margin: 0; font-size: 22px; }
+
+.status-bar { display: flex; align-items: center; gap: 8px; }
+.badge {
+  padding: 6px 10px; border-radius: 999px; background: var(--card);
+  font-size: 13px; border: 1px solid #2a2f3a;
+}
+.badge-ok { background: rgba(46, 204, 113, .12); color: var(--ok); border-color: rgba(46, 204, 113, .4); }
+.badge-stop { background: rgba(231, 76, 60, .12); color: var(--stop); border-color: rgba(231, 76, 60, .4); }
+.badge-muted { background: #222834; color: var(--muted); border-color: #333b49; }
+
+.info {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px; padding: 8px 0 18px;
+}
+.info-item { background: var(--card); border: 1px solid #2a2f3a; border-radius: 12px; padding: 12px; }
+.info-item .label { color: var(--muted); font-size: 12px; }
+.info-item .value { font-size: 16px; margin-top: 2px; }
+
+.btn {
+  display: inline-block; background: var(--accent); color: #fff; padding: 10px 14px;
+  border-radius: 10px; text-decoration: none; font-weight: 600;
+}
+
+.table-wrap h2 { margin: 8px 0 10px; font-size: 18px; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid #2a2f3a; border-radius: 12px; overflow: hidden; }
+thead th { text-align: right; padding: 10px; background: #1a1f2a; color: var(--muted); font-weight: 600; font-size: 13px; }
+tbody td { padding: 10px; border-top: 1px solid #222734; font-size: 14px; }
+tbody tr:hover { background: #171c27; }
+
+.pos { color: var(--ok); font-weight: 600; }
+.neg { color: var(--stop); font-weight: 600; }
+
+.empty { margin: 10px 0; color: var(--muted); }
+
+.foot { padding: 16px 0 40px; color: var(--muted); font-size: 12px; }
