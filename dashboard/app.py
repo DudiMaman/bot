@@ -3,11 +3,12 @@ import os
 import io
 import csv
 import json
+from typing import Optional
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template, jsonify, send_file, abort, request
 
 # ===== הגדרות כלליות =====
-APP_TZ = timezone.utc  # השרת עובד ב-UTC; ההמרה לישראל תיעשה בצד-לקוח בשלב 2
+APP_TZ = timezone.utc  # השרת עובד ב-UTC; ההמרה לישראל תיעשה בצד-לקוח בשלבים הבאים
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # נתיב לוגים של הבוט (ניתן לשנות עם ENV בשם LOG_DIR)
@@ -16,26 +17,9 @@ LOG_DIR = os.getenv("LOG_DIR", DEFAULT_LOG_DIR)
 
 TRADES_CSV = os.path.join(LOG_DIR, "trades.csv")
 EQUITY_CSV = os.path.join(LOG_DIR, "equity_curve.csv")
-STATE_JSON = os.path.join(LOG_DIR, "bot_state.json")   # לא מפיל תהליך; רק חיווי/override לדאשבורד
+STATE_JSON = os.path.join(LOG_DIR, "bot_state.json")  # חיווי ידני להפעלה/עצירה (לא מפיל תהליכים)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
-
-
-# ===== יצירת תיקיות/קבצים חסרים אוטומטית =====
-def _ensure_logs_and_headers():
-    os.makedirs(LOG_DIR, exist_ok=True)
-    if not os.path.exists(TRADES_CSV):
-        with open(TRADES_CSV, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(
-                ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"]
-            )
-    if not os.path.exists(EQUITY_CSV):
-        with open(EQUITY_CSV, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(["time", "equity"])
-    if not os.path.exists(STATE_JSON):
-        _write_state({"manual_status": None, "updated_at": None})  # None = אין override
-
-_ensure_logs_and_headers()
 
 
 # ===== אחסון סטטוס ידני (Play/Pause עדין) =====
@@ -52,6 +36,28 @@ def _write_state(obj):
             json.dump(obj, f)
     except Exception:
         pass
+
+
+# ===== יצירת תיקיות/קבצים חסרים אוטומטית =====
+def _ensure_logs_and_headers():
+    """
+    דואג שתיקיית הלוגים וקבצי ה-CSV קיימים.
+    אם קובץ חסר—ייווצר עם כותרות בלבד. יוצר גם STATE_JSON ברירת מחדל.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    if not os.path.exists(TRADES_CSV):
+        with open(TRADES_CSV, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow(
+                ["time", "connector", "symbol", "type", "side", "price", "qty", "pnl", "equity"]
+            )
+    if not os.path.exists(EQUITY_CSV):
+        with open(EQUITY_CSV, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow(["time", "equity"])
+    if not os.path.exists(STATE_JSON):
+        _write_state({"manual_status": None, "updated_at": None})  # None = אין override
+
+_ensure_logs_and_headers()
 
 
 # ===== עזרי קבצים =====
@@ -77,7 +83,7 @@ def _read_csv(path, limit=None):
     return rows[-limit:] if limit else rows
 
 
-def _parse_iso(ts: str):
+def _parse_iso(ts: str) -> Optional[datetime]:
     """ממיר טקסט לזמן. תומך ב־Z, +00:00, וגם בלי אזור."""
     if not ts or not isinstance(ts, str):
         return None
@@ -95,7 +101,7 @@ def _parse_iso(ts: str):
     return None
 
 
-def _last_timestamp(row: dict):
+def _last_timestamp(row: dict) -> Optional[datetime]:
     """מחלץ timestamp מתוך שורה לפי שמות מקובלים."""
     if not isinstance(row, dict):
         return None
@@ -108,7 +114,7 @@ def _last_timestamp(row: dict):
 # ===== עזרי טווחי זמן =====
 def _compute_range_from_query():
     """
-    מחזיר (start_utc, end_utc, label) ע"פ פרמטרי שאילתה:
+    מחזיר (start_utc, end_utc, label) ע"פ פרמטרים:
       - range: last_1h | last_24h | last_7d | last_30d | last_90d
       - from, to: ערכי ISO-8601 (UTC או עם offset)
     אם לא סופק דבר -> (None, None, "all")
@@ -137,7 +143,7 @@ def _compute_range_from_query():
     return None, None, "all"
 
 
-def _within_range(ts: datetime, start: datetime | None, end: datetime | None):
+def _within_range(ts: Optional[datetime], start: Optional[datetime], end: Optional[datetime]) -> bool:
     if ts is None:
         return False if (start or end) else True
     if start and ts < start:
@@ -231,7 +237,7 @@ def data():
     equity = _filter_rows_by_time(equity_all, start, end)
     st = _bot_status()
 
-    # פורמט "פשוט" לרענון עבור ה-UI (לפי בקשתך בשלב 7)
+    # פורמט "פשוט" לשורת Last refresh (שלב 7)
     now_iso_simple = datetime.now(APP_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
     return jsonify(
@@ -257,7 +263,6 @@ def export_trades():
     start, end, _ = _compute_range_from_query()
     rows = _filter_rows_by_time(_read_csv(TRADES_CSV), start, end)
 
-    # כותבים CSV זמני לזיכרון מתוך הרשומות המסוננות
     if not rows:
         # נחזיר רק כותרות סטנדרטיות
         output = io.StringIO()
