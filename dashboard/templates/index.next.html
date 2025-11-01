@@ -20,12 +20,21 @@
 
   <section class="wrap info">
     <div class="info-item">
-      <div class="label">Last refresh (IL)</div>
-      <div id="last-refresh-il" class="value">—</div>
+      <div class="label">Last refresh (local)</div>
+      <div id="last-refresh-local" class="value">—</div>
     </div>
     <div class="info-item">
       <div class="label">Last refresh (UTC)</div>
       <div id="last-refresh-utc" class="value">—</div>
+    </div>
+    <div class="info-item">
+      <div class="label">Timezone</div>
+      <select id="tz-select">
+        <option value="Asia/Jerusalem">Asia/Jerusalem</option>
+        <option value="UTC">UTC</option>
+        <option value="Etc/GMT-2">GMT+2</option>
+        <option value="Etc/GMT-3">GMT+3</option>
+      </select>
     </div>
     <div class="info-item">
       <div class="label">Log dir</div>
@@ -37,11 +46,11 @@
   </section>
 
   <section class="wrap table-wrap">
-    <h2>Trades (זמן תצוגה: Asia/Jerusalem)</h2>
+    <h2>Trades (תצוגה לפי אזור הזמן שנבחר)</h2>
     <table id="trades-table">
       <thead>
         <tr>
-          <th>Time (IL)</th>
+          <th>Time</th>
           <th>Symbol</th>
           <th>Side</th>
           <th>Type</th>
@@ -57,67 +66,9 @@
   </section>
 
   <footer class="wrap foot">
-    <small>תצוגת הזמן בדשבורד: Asia/Jerusalem (הדאטה יכול להיות UTC/אופסט — המרה בצד לקוח בלבד)</small>
+    <small>תצוגת הזמן בדשבורד נקבעת לפי הבחירה באפשרויות למעלה — המערכת פועלת בשעון UTC.</small>
   </footer>
 
-  <!-- תצוגה בלבד: עוטפים fetch ומזיזים +2 שעות לכל הזמנים שמגיעים מ-/data -->
-  <script defer>
-  (function () {
-    const SHIFT_MS = 2 * 60 * 60 * 1000; // +2h
-    const _fetch = window.fetch;
-
-    function toDate(v){ if(!v) return null; const d=new Date(v); return isNaN(d.getTime())?null:d; }
-    function plus2Iso(v){
-      const d = toDate(v); if(!d) return null;
-      return new Date(d.getTime() + SHIFT_MS).toISOString();
-    }
-
-    window.fetch = async function(input, init){
-      const res = await _fetch(input, init);
-      try{
-        const url = (typeof input==='string') ? input : (input && input.url) || '';
-        if(url.includes('/data')){
-          const clone = res.clone();
-          const data  = await clone.json();
-
-          // last refresh
-          const baseNow = data.now_utc || data.now || data.server_time;
-          const shiftedNow = plus2Iso(baseNow);
-          if(shiftedNow){
-            // משנים את מה שה-UI כבר מציג כדי לראות שעה מקומית, בלי לשנות נראות/מבנה
-            data.now_utc = shiftedNow;
-            data.now_utc_simple = shiftedNow.replace('T',' ').replace('Z','');
-            data.now_il = shiftedNow; // אם ה-UI משתמש בזה — גם זה יהיה נכון
-          }
-
-          // trades
-          if(Array.isArray(data.trades)){
-            data.trades = data.trades.map(r=>{
-              const base = r.time || r.timestamp || r.ts || r.datetime;
-              const s = plus2Iso(base);
-              return s ? { ...r, time: s, time_il: s } : r;
-            });
-          }
-
-          // equity
-          if(Array.isArray(data.equity)){
-            data.equity = data.equity.map(r=>{
-              const base = r.time || r.timestamp || r.ts || r.datetime;
-              const s = plus2Iso(base);
-              return s ? { ...r, time: s, time_il: s } : r;
-            });
-          }
-
-          const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-          return new Response(blob, { status: res.status, statusText: res.statusText, headers: res.headers });
-        }
-      }catch(e){ /* במקרה חריג – לא משנים את התגובה */ }
-      return res;
-    };
-  })();
-  </script>
-
-  <!-- קובץ ה-JS הקיים שלך – נשאר כפי שהוא -->
   <script defer src="/static/js/app.js"></script>
 </body>
 </html>
