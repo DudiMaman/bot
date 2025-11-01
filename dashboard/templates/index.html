@@ -1,132 +1,66 @@
-// תצוגת זמן ישראל בכל המקומות בדשבורד — ללא שינוי בשרת/CSV
-const IL_TZ = 'Asia/Jerusalem';
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Trading Bot Dashboard</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <header class="wrap">
+    <div class="brand">
+      <div class="logo">🤖</div>
+      <h1>Trading Bot Dashboard</h1>
+    </div>
+    <div class="status-bar">
+      <span id="status-badge" class="badge">—</span>
+      <span id="override-badge" class="badge badge-muted" style="display:none;">Manual</span>
+    </div>
+  </header>
 
-// ממיר מחרוזת ISO (או כל קלט Date תקף) למחרוזת תצוגה בשעון ישראל
-function toILString(isoLike) {
-  if (!isoLike) return '—';
-  const d = new Date(isoLike);          // תומך ב-Z, באופסטים כמו +02:00, או ב-YYYY-MM-DD HH:MM:SS (בחלק מהדפדפנים)
-  if (isNaN(d.getTime())) return String(isoLike); // אם לא ניתן לפרש — מציגים כמו שזה (fail-soft)
-  const fmt = new Intl.DateTimeFormat('he-IL', {
-    timeZone: IL_TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false
-  });
-  const parts = fmt.formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
-}
+  <section class="wrap info">
+    <div class="info-item">
+      <div class="label">Last refresh (IL)</div>
+      <div id="last-refresh-il" class="value">—</div>
+    </div>
+    <div class="info-item">
+      <div class="label">Last refresh (UTC)</div>
+      <div id="last-refresh-utc" class="value">—</div>
+    </div>
+    <div class="info-item">
+      <div class="label">Log dir</div>
+      <div id="log-dir" class="value">—</div>
+    </div>
+    <div class="info-item">
+      <a id="download-csv" class="btn" href="/export/trades.csv">⬇︎ הורד CSV</a>
+    </div>
+  </section>
 
-// עיצוב תגית סטטוס
-function paintStatus(el, status) {
-  el.textContent = status || '—';
-  el.classList.remove('badge-ok','badge-stop');
-  if (status === 'RUNNING') el.classList.add('badge-ok');
-  else el.classList.add('badge-stop');
-}
+  <section class="wrap table-wrap">
+    <h2>Trades (זמן תצוגה: Asia/Jerusalem)</h2>
+    <table id="trades-table">
+      <thead>
+        <tr>
+          <th>Time (IL)</th>
+          <th>Symbol</th>
+          <th>Side</th>
+          <th>Type</th>
+          <th>Price</th>
+          <th>Qty</th>
+          <th>PnL</th>
+          <th>Equity</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="empty-trades" class="empty" style="display:none;">אין טריידים להצגה בטווח הנוכחי.</div>
+  </section>
 
-// החזרת ערך זמן מהשורה (תומך במספר שמות נפוצים)
-function getRowTime(row) {
-  return row.time || row.timestamp || row.ts || row.datetime || row.date || null;
-}
+  <footer class="wrap foot">
+    <small>תצוגת הזמן בדשבורד: Asia/Jerusalem (הדאטה יכול להיות UTC/אופסט — המרה בצד לקוח בלבד)</small>
+  </footer>
 
-// ציור טבלת הטריידים עם זמן ישראל בעמודה הראשונה
-function renderTrades(rows) {
-  const tbody = document.querySelector('#trades-table tbody');
-  const empty = document.getElementById('empty-trades');
-  tbody.innerHTML = '';
-
-  if (!Array.isArray(rows) || rows.length === 0) {
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-
-  rows.forEach(r => {
-    const tr = document.createElement('tr');
-
-    const timeIL = toILString(getRowTime(r));
-    const cells = [
-      timeIL,
-      r.symbol ?? '—',
-      r.side ?? '—',
-      r.type ?? '—',
-      r.price ?? '—',
-      r.qty ?? '—',
-      r.pnl ?? '—',
-      r.equity ?? '—'
-    ];
-
-    cells.forEach((val, idx) => {
-      const td = document.createElement('td');
-      td.textContent = val;
-
-      // צביעה קלה ל-Side ול-PnL
-      if (idx === 2) {
-        const side = String(val).toUpperCase();
-        if (side === 'BUY' || side === 'LONG') td.classList.add('pos');
-        if (side === 'SELL' || side === 'SHORT') td.classList.add('neg');
-      }
-      if (idx === 6) {
-        const n = Number(val);
-        if (!Number.isNaN(n)) td.classList.add(n >= 0 ? 'pos' : 'neg');
-      }
-
-      tr.appendChild(td);
-    });
-
-    tbody.appendChild(tr);
-  });
-}
-
-// קריאת /data והצגה — ממיר תצוגת הזמן ל-IL בלבד
-async function loadData() {
-  const statusEl   = document.getElementById('status-badge');
-  const overrideEl = document.getElementById('override-badge');
-  const lrIL       = document.getElementById('last-refresh-il');
-  const lrUTC      = document.getElementById('last-refresh-utc');
-  const logDirEl   = document.getElementById('log-dir');
-  const dl         = document.getElementById('download-csv');
-
-  // שמירה על query string לטווחים בעתיד (אם יתווספו)
-  const qs = location.search || '';
-  const res = await fetch('/data' + qs, { cache: 'no-store' });
-  const data = await res.json();
-
-  // סטטוס
-  paintStatus(statusEl, data.status);
-  overrideEl.style.display = data.manual_override ? 'inline-block' : 'none';
-
-  // Last refresh — מציגים גם IL וגם UTC
-  // נעדיף שדה שרת אם קיים (now_utc / now / server_time), אחרת Date.now()
-  const serverNow = data.now_utc || data.now || data.server_time || new Date().toISOString();
-  lrIL.textContent  = toILString(serverNow);
-  // UTC להצגה קריאה (YYYY-MM-DD HH:mm:ss)
-  try {
-    const d = new Date(serverNow);
-    lrUTC.textContent = isNaN(d.getTime())
-      ? String(serverNow)
-      : d.toISOString().replace('T',' ').replace('Z','');
-  } catch {
-    lrUTC.textContent = String(serverNow);
-  }
-
-  // לוג־דיר מהבריאות (מידע עזר)
-  fetch('/health', { cache: 'no-store' })
-    .then(r => r.json())
-    .then(h => { logDirEl.textContent = h.log_dir || '—'; })
-    .catch(() => {});
-
-  // קישור הורדת CSV משמר את ה-query string
-  dl.href = '/export/trades.csv' + qs;
-
-  // טבלת טריידים — זמן ישראל
-  renderTrades(data.trades || []);
-}
-
-// רענון עדין
-function startAutoRefresh() {
-  loadData().catch(console.error);
-  setInterval(() => loadData().catch(console.error), 15000);
-}
-
-document.addEventListener('DOMContentLoaded', startAutoRefresh);
+  <!-- שים לב: אין קוד JS כאן. רק הפניה לקובץ חיצוני -->
+  <script defer src="/static/js/app.js"></script>
+</body>
+</html>
